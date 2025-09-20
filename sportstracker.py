@@ -466,115 +466,268 @@ if page == "Enter Results":
                         results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
                         results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
                     
-                    # Create input form for each player
-                    results_to_save = {}
+                    # Choose input method
+                    input_method = st.radio(
+                        "Choose input method:",
+                        ["Individual Entry", "Bulk Text Entry"],
+                        horizontal=True
+                    )
                     
-                    st.write("Enter results for each player:")
-                    
-                    for _, player in players_df.iterrows():
-                        player_id = int(player['id'])
+                    if input_method == "Individual Entry":
+                        # Original individual entry method
+                        results_to_save = {}
                         
-                        with st.container():
-                            col1, col2, col3 = st.columns([2, 2, 1])
+                        st.write("Enter results for each player:")
+                        
+                        for _, player in players_df.iterrows():
+                            player_id = int(player['id'])
                             
-                            with col1:
-                                st.write(f"**{player['name']}**")
+                            with st.container():
+                                col1, col2, col3 = st.columns([2, 2, 1])
+                                
+                                with col1:
+                                    st.write(f"**{player['name']}**")
+                                
+                                # Get existing result if any
+                                existing_result = None
+                                if not results_df.empty:
+                                    existing_mask = (
+                                        (results_df['player_id'] == player_id) & 
+                                        (results_df['week_id'] == selected_week_id)
+                                    )
+                                    if existing_mask.any():
+                                        existing_result = results_df[existing_mask].iloc[0]
+                                
+                                with col2:
+                                    # Status selector
+                                    status_options = ['participated', 'omitted']
+                                    default_status = 0
+                                    if existing_result is not None and existing_result['status'] == 'omitted':
+                                        default_status = 1
+                                    
+                                    status = st.selectbox(
+                                        "Status:",
+                                        status_options,
+                                        key=f"status_{player_id}",
+                                        index=default_status,
+                                        label_visibility="collapsed"
+                                    )
+                                
+                                with col3:
+                                    if status == 'participated':
+                                        # Correct guesses input
+                                        default_correct = 0
+                                        if existing_result is not None and pd.notna(existing_result['correct_guesses']):
+                                            default_correct = int(existing_result['correct_guesses'])
+                                        
+                                        correct_guesses = st.number_input(
+                                            f"Correct guesses (0-{total_games}):",
+                                            min_value=0,
+                                            max_value=total_games,
+                                            value=default_correct,
+                                            key=f"correct_{player_id}",
+                                            label_visibility="collapsed"
+                                        )
+                                        results_to_save[player_id] = (correct_guesses, status)
+                                    else:
+                                        st.write("—")
+                                        results_to_save[player_id] = (0, status)
+                                
+                                st.divider()
+                        
+                        # Save button for individual entry
+                        if st.button("Save All Results", type="primary"):
+                            # Process individual entry results
+                            batch_data = []
+                            results_df_for_updates = data['results'].copy()
                             
-                            # Get existing result if any
-                            existing_result = None
-                            if not results_df.empty:
+                            if not results_df_for_updates.empty:
+                                results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
+                                results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
+                            
+                            next_id = get_next_id(data['results'])
+                            
+                            for player_id, (correct_guesses, status) in results_to_save.items():
+                                # Check if result already exists
+                                existing = False
+                                if not results_df_for_updates.empty:
+                                    existing_mask = (
+                                        (results_df_for_updates['player_id'] == player_id) & 
+                                        (results_df_for_updates['week_id'] == selected_week_id)
+                                    )
+                                    if existing_mask.any():
+                                        existing = True
+                                
+                                if not existing:
+                                    # Add new result
+                                    result_data = {
+                                        'id': next_id,
+                                        'player_id': player_id,
+                                        'week_id': selected_week_id,
+                                        'correct_guesses': correct_guesses if status != 'omitted' else '',
+                                        'status': status,
+                                        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    }
+                                    batch_data.append(result_data)
+                                    next_id += 1
+                            
+                            # Batch save all new results
+                            if batch_data:
+                                if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
+                                    st.success(f"Saved {len(batch_data)} new results successfully!")
+                                    # Clear cache to reload data
+                                    st.cache_data.clear()
+                                    time.sleep(1)  # Small delay to ensure data is saved
+                                    st.rerun()
+                                else:
+                                    st.error("Error saving results. Please try again.")
+                            else:
+                                st.info("No new results to save. All players already have results for this week.")
+                    
+                    else:  # Bulk Text Entry
+                        st.write("**Bulk Text Entry**")
+                        st.write("Enter results in the format: `PlayerName: CorrectGuesses` or `PlayerName: omitted`")
+                        st.write("Examples:")
+                        st.code("""John Smith: 7
+Jane Doe: omitted
+Mike Johnson: 5
+Sarah Wilson: 9""")
+                        
+                        # Get existing results for display
+                        existing_results_text = ""
+                        if not results_df.empty:
+                            for _, player in players_df.iterrows():
+                                player_id = int(player['id'])
                                 existing_mask = (
                                     (results_df['player_id'] == player_id) & 
                                     (results_df['week_id'] == selected_week_id)
                                 )
                                 if existing_mask.any():
-                                    existing_result = results_df[existing_mask].iloc[0]
+                                    result = results_df[existing_mask].iloc[0]
+                                    if result['status'] == 'omitted':
+                                        existing_results_text += f"{player['name']}: omitted\n"
+                                    else:
+                                        correct = int(result['correct_guesses']) if pd.notna(result['correct_guesses']) else 0
+                                        existing_results_text += f"{player['name']}: {correct}\n"
+                        
+                        bulk_results_text = st.text_area(
+                            "Enter results (one per line):",
+                            height=200,
+                            value=existing_results_text,
+                            placeholder="PlayerName: CorrectGuesses\nPlayerName: omitted"
+                        )
+                        
+                        # Parse and preview
+                        if bulk_results_text.strip():
+                            parsed_results = {}
+                            parse_errors = []
                             
-                            with col2:
-                                # Status selector
-                                status_options = ['participated', 'omitted']
-                                default_status = 0
-                                if existing_result is not None and existing_result['status'] == 'omitted':
-                                    default_status = 1
+                            # Create name to ID mapping
+                            name_to_id = {player['name']: int(player['id']) for _, player in players_df.iterrows()}
+                            
+                            for line_num, line in enumerate(bulk_results_text.strip().split('\n'), 1):
+                                line = line.strip()
+                                if not line:
+                                    continue
                                 
-                                status = st.selectbox(
-                                    "Status:",
-                                    status_options,
-                                    key=f"status_{player_id}",
-                                    index=default_status,
-                                    label_visibility="collapsed"
-                                )
-                            
-                            with col3:
-                                if status == 'participated':
-                                    # Correct guesses input
-                                    default_correct = 0
-                                    if existing_result is not None and pd.notna(existing_result['correct_guesses']):
-                                        default_correct = int(existing_result['correct_guesses'])
-                                    
-                                    correct_guesses = st.number_input(
-                                        f"Correct guesses (0-{total_games}):",
-                                        min_value=0,
-                                        max_value=total_games,
-                                        value=default_correct,
-                                        key=f"correct_{player_id}",
-                                        label_visibility="collapsed"
-                                    )
-                                    results_to_save[player_id] = (correct_guesses, status)
+                                if ':' not in line:
+                                    parse_errors.append(f"Line {line_num}: Missing ':' separator")
+                                    continue
+                                
+                                parts = line.split(':', 1)
+                                player_name = parts[0].strip()
+                                result_str = parts[1].strip().lower()
+                                
+                                if player_name not in name_to_id:
+                                    parse_errors.append(f"Line {line_num}: Player '{player_name}' not found")
+                                    continue
+                                
+                                if result_str == 'omitted':
+                                    parsed_results[name_to_id[player_name]] = (0, 'omitted')
                                 else:
-                                    st.write("—")
-                                    results_to_save[player_id] = (0, status)
+                                    try:
+                                        correct_guesses = int(result_str)
+                                        if correct_guesses < 0 or correct_guesses > total_games:
+                                            parse_errors.append(f"Line {line_num}: Score {correct_guesses} out of range (0-{total_games})")
+                                            continue
+                                        parsed_results[name_to_id[player_name]] = (correct_guesses, 'participated')
+                                    except ValueError:
+                                        parse_errors.append(f"Line {line_num}: Invalid number '{result_str}'")
                             
-                            st.divider()
-                    
-                    # Save button
-                    if st.button("Save All Results", type="primary"):
-                        # Prepare batch data
-                        batch_data = []
-                        results_df_for_updates = data['results'].copy()
-                        
-                        if not results_df_for_updates.empty:
-                            results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
-                            results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
-                        
-                        next_id = get_next_id(data['results'])
-                        
-                        for player_id, (correct_guesses, status) in results_to_save.items():
-                            # Check if result already exists
-                            existing = False
-                            if not results_df_for_updates.empty:
-                                existing_mask = (
-                                    (results_df_for_updates['player_id'] == player_id) & 
-                                    (results_df_for_updates['week_id'] == selected_week_id)
-                                )
-                                if existing_mask.any():
-                                    existing = True
+                            # Show preview
+                            if parsed_results:
+                                st.write("**Preview:**")
+                                preview_data = []
+                                for player_id, (correct, status) in parsed_results.items():
+                                    player_name = players_df[players_df['id'] == player_id]['name'].iloc[0]
+                                    preview_data.append({
+                                        'Player': player_name,
+                                        'Result': f"{correct}/{total_games}" if status == 'participated' else 'Omitted',
+                                        'Status': status.title()
+                                    })
+                                
+                                preview_df = pd.DataFrame(preview_data)
+                                st.dataframe(preview_df, use_container_width=True, hide_index=True)
                             
-                            if not existing:
-                                # Add new result
-                                result_data = {
-                                    'id': next_id,
-                                    'player_id': player_id,
-                                    'week_id': selected_week_id,
-                                    'correct_guesses': correct_guesses if status != 'omitted' else '',
-                                    'status': status,
-                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                }
-                                batch_data.append(result_data)
-                                next_id += 1
-                        
-                        # Batch save all new results
-                        if batch_data:
-                            if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
-                                st.success(f"Saved {len(batch_data)} new results successfully!")
-                                # Clear cache to reload data
-                                st.cache_data.clear()
-                                time.sleep(1)  # Small delay to ensure data is saved
-                                st.rerun()
-                            else:
-                                st.error("Error saving results. Please try again.")
-                        else:
-                            st.info("No new results to save. All players already have results for this week.")
+                            # Show errors
+                            if parse_errors:
+                                st.error("**Parse Errors:**")
+                                for error in parse_errors:
+                                    st.write(f"❌ {error}")
+                            
+                            # Save button for bulk entry
+                            if parsed_results and not parse_errors:
+                                if st.button("Save Bulk Results", type="primary"):
+                                    # Process bulk entry results
+                                    batch_data = []
+                                    results_df_for_updates = data['results'].copy()
+                                    
+                                    if not results_df_for_updates.empty:
+                                        results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
+                                        results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
+                                    
+                                    next_id = get_next_id(data['results'])
+                                    
+                                    for player_id, (correct_guesses, status) in parsed_results.items():
+                                        # Check if result already exists
+                                        existing = False
+                                        if not results_df_for_updates.empty:
+                                            existing_mask = (
+                                                (results_df_for_updates['player_id'] == player_id) & 
+                                                (results_df_for_updates['week_id'] == selected_week_id)
+                                            )
+                                            if existing_mask.any():
+                                                existing = True
+                                        
+                                        if not existing:
+                                            # Add new result
+                                            result_data = {
+                                                'id': next_id,
+                                                'player_id': player_id,
+                                                'week_id': selected_week_id,
+                                                'correct_guesses': correct_guesses if status != 'omitted' else '',
+                                                'status': status,
+                                                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                            }
+                                            batch_data.append(result_data)
+                                            next_id += 1
+                                    
+                                    # Batch save all new results
+                                    if batch_data:
+                                        if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
+                                            st.success(f"Saved {len(batch_data)} results successfully!")
+                                            # Clear cache to reload data
+                                            st.cache_data.clear()
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error("Error saving results. Please try again.")
+                                    else:
+                                        st.info("No new results to save. All specified players already have results for this week.")
+                            
+                            elif not parsed_results and not parse_errors:
+                                st.info("Enter some results above to see the preview.")
+                
                 else:
                     st.warning("No players found. Please add players in the 'Manage Players & Weeks' section.")
         else:
