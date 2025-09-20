@@ -774,8 +774,7 @@ page = st.sidebar.selectbox("Choose a page:", [
     "Weekly Standings", 
     "Season Standings",
     "Player History",
-    "Improvement Trends",  # New page added
-    "Edit Players",
+    "Improvement Trends",
     "Edit Results", 
     "Manage Players & Weeks"
 ])
@@ -1726,104 +1725,6 @@ elif page == "Improvement Trends":
         st.info(f"Not enough data for trend analysis. Need at least 3 weeks of participation per player.")
         st.write("Add more weekly results to see improvement trends and performance analysis.")
 
-elif page == "Edit Players":
-    st.header("Edit Players")
-    
-    players_df = data['players'].copy()
-    if not players_df.empty:
-        st.subheader("Current Players")
-        
-        # Initialize session state for editing if not exists
-        if 'editing_player' not in st.session_state:
-            st.session_state.editing_player = None
-        
-        # Create editable interface
-        for _, player in players_df.iterrows():
-            player_id = int(player['id'])
-            
-            with st.expander(f"Player: {player['name']}", expanded=False):
-                # Create unique keys using timestamp or counter
-                unique_suffix = f"{player_id}_{hash(str(player['name']))}"
-                
-                col1, col2, col3 = st.columns([2, 1, 1])
-                
-                with col1:
-                    new_name = st.text_input(
-                        "Name:",
-                        value=player['name'],
-                        key=f"edit_name_{unique_suffix}"
-                    )
-                
-                with col2:
-                    if st.button("Update", key=f"update_{unique_suffix}", type="secondary"):
-                        if new_name.strip() and new_name != player['name']:
-                            # Check if new name already exists
-                            if new_name in players_df['name'].values:
-                                st.error("A player with this name already exists!")
-                            else:
-                                if update_player_name(spreadsheet, player_id, new_name.strip()):
-                                    st.success("Player updated successfully!")
-                                    st.cache_data.clear()
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error("Error updating player.")
-                        elif new_name == player['name']:
-                            st.info("No changes made.")
-                        else:
-                            st.error("Please enter a valid name.")
-                
-                with col3:
-                    delete_key = f"delete_{unique_suffix}"
-                    confirm_key = f"confirm_delete_{player_id}"
-                    
-                    # Check if we're in confirmation mode
-                    in_confirmation = st.session_state.get(confirm_key, False)
-                    
-                    if not in_confirmation:
-                        if st.button("Delete", key=delete_key, type="secondary"):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
-                    else:
-                        col3a, col3b = st.columns(2)
-                        with col3a:
-                            if st.button("Confirm", key=f"confirm_{unique_suffix}", type="secondary"):
-                                if delete_player(spreadsheet, player_id):
-                                    st.success("Player and all their results deleted successfully!")
-                                    # Clean up session state
-                                    if confirm_key in st.session_state:
-                                        del st.session_state[confirm_key]
-                                    st.cache_data.clear()
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error("Error deleting player.")
-                                    if confirm_key in st.session_state:
-                                        del st.session_state[confirm_key]
-                        
-                        with col3b:
-                            if st.button("Cancel", key=f"cancel_{unique_suffix}", type="secondary"):
-                                if confirm_key in st.session_state:
-                                    del st.session_state[confirm_key]
-                                st.rerun()
-                        
-                        st.warning("⚠️ Are you sure? This will delete the player and ALL their results!")
-                
-                # Show player statistics
-                results_df = data['results'].copy()
-                if not results_df.empty:
-                    results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
-                    player_results = results_df[results_df['player_id'] == player_id]
-                    
-                    if not player_results.empty:
-                        total_weeks = len(player_results)
-                        participated = len(player_results[player_results['status'] == 'participated'])
-                        omitted = len(player_results[player_results['status'] == 'omitted'])
-                        
-                        st.write(f"**Statistics:** {total_weeks} weeks total | {participated} participated | {omitted} omitted")
-    else:
-        st.info("No players found. Add players in the 'Manage Players & Weeks' section.")
-
 elif page == "Edit Results":
     st.header("Edit Results")
     
@@ -2050,13 +1951,128 @@ elif page == "Manage Players & Weeks":
                 else:
                     st.error("Please enter at least one player name.")
         
-        # Show existing players
-        players_df = data['players']
+        # Show existing players with edit functionality
+        players_df = data['players'].copy()
         if not players_df.empty:
             st.subheader("Current Players")
-            st.dataframe(players_df[['name', 'created_at']], use_container_width=True, hide_index=True)
+            
+            # Get results data for statistics
+            results_df = data['results'].copy()
+            
+            # Create editable interface for players
+            for _, player in players_df.iterrows():
+                player_id = int(player['id'])
+                
+                # Calculate player statistics
+                player_stats = {'total_weeks': 0, 'participated': 0, 'omitted': 0}
+                if not results_df.empty:
+                    results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                    player_results = results_df[results_df['player_id'] == player_id]
+                    
+                    if not player_results.empty:
+                        player_stats['total_weeks'] = len(player_results)
+                        player_stats['participated'] = len(player_results[player_results['status'] == 'participated'])
+                        player_stats['omitted'] = len(player_results[player_results['status'] == 'omitted'])
+                
+                # Create expandable card
+                stats_text = f"{player_stats['total_weeks']} weeks total, {player_stats['participated']} participated"
+                with st.expander(f"{player['name']} ({stats_text})", expanded=False):
+                    # Create unique keys
+                    unique_suffix = f"{player_id}_{hash(str(player['name']))}"
+                    
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    
+                    with col1:
+                        new_name = st.text_input(
+                            "Player Name:",
+                            value=player['name'],
+                            key=f"edit_player_name_{unique_suffix}"
+                        )
+                    
+                    with col2:
+                        st.write("**Statistics:**")
+                        st.write(f"Total weeks: {player_stats['total_weeks']}")
+                        st.write(f"Participated: {player_stats['participated']}")
+                        st.write(f"Omitted: {player_stats['omitted']}")
+                    
+                    with col3:
+                        if player_stats['total_weeks'] > 0:
+                            st.write(f"**Activity Level:**")
+                            participation_rate = (player_stats['participated'] / player_stats['total_weeks']) * 100
+                            st.write(f"{participation_rate:.0f}% participation")
+                        else:
+                            st.write("**Status:**")
+                            st.write("No results yet")
+                    
+                    # Action buttons
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    
+                    with col1:
+                        if st.button("Update Player", key=f"update_player_{unique_suffix}", type="secondary"):
+                            if new_name.strip() and new_name != player['name']:
+                                # Check if new name already exists
+                                if new_name in players_df['name'].values:
+                                    st.error("A player with this name already exists!")
+                                else:
+                                    if update_player_name(spreadsheet, player_id, new_name.strip()):
+                                        st.success("Player updated successfully!")
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Error updating player.")
+                            elif new_name == player['name']:
+                                st.info("No changes made.")
+                            else:
+                                st.error("Please enter a valid name.")
+                    
+                    with col2:
+                        delete_key = f"delete_player_{unique_suffix}"
+                        confirm_key = f"confirm_delete_player_{player_id}"
+                        
+                        # Check if we're in confirmation mode
+                        in_confirmation = st.session_state.get(confirm_key, False)
+                        
+                        if not in_confirmation:
+                            if st.button("Delete Player", key=delete_key, type="secondary"):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
+                        else:
+                            col2a, col2b = st.columns(2)
+                            with col2a:
+                                if st.button("Confirm", key=f"confirm_player_{unique_suffix}", type="secondary"):
+                                    if delete_player(spreadsheet, player_id):
+                                        st.success("Player and all results deleted successfully!")
+                                        if confirm_key in st.session_state:
+                                            del st.session_state[confirm_key]
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Error deleting player.")
+                                        if confirm_key in st.session_state:
+                                            del st.session_state[confirm_key]
+                            
+                            with col2b:
+                                if st.button("Cancel", key=f"cancel_player_{unique_suffix}", type="secondary"):
+                                    if confirm_key in st.session_state:
+                                        del st.session_state[confirm_key]
+                                    st.rerun()
+                    
+                    with col3:
+                        if player_stats['total_weeks'] > 0:
+                            st.write(f"⚠️ Has {player_stats['total_weeks']} results")
+                        else:
+                            st.write("✅ No results yet")
+                    
+                    # Show confirmation warning
+                    if st.session_state.get(confirm_key, False):
+                        if player_stats['total_weeks'] > 0:
+                            st.warning(f"⚠️ This will delete {player['name']} AND all {player_stats['total_weeks']} results!")
+                        else:
+                            st.warning(f"⚠️ Confirm deletion of {player['name']}?")
         else:
-            st.info("No players found.")
+            st.info("No players found. Add players using the form above.")
     
     with tab2:
         st.subheader("Manage Weeks")
