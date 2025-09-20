@@ -1269,7 +1269,8 @@ page = st.sidebar.selectbox("Choose a page:", [
     "Season Standings",
     "Player History",
     "Improvement Trends",
-    "Manage Players & Weeks"
+    "Manage Players & Weeks",
+    "Help"
 ])
 
 # Get current season year
@@ -2621,6 +2622,408 @@ elif page == "Manage Players & Weeks":
                 st.info(f"No weeks found for season {current_season}.")
         else:
             st.info("No weeks found.")
+
+elif page == "Help":
+    st.header("📚 Pick'ems 2026 - Comprehensive User Guide")
+    
+    # Table of Contents
+    st.markdown("""
+    ## Table of Contents
+    1. [Getting Started](#getting-started)
+    2. [Enter Results](#enter-results)
+    3. [Weekly Standings](#weekly-standings)
+    4. [Season Standings](#season-standings)
+    5. [Player History](#player-history)
+    6. [Improvement Trends](#improvement-trends)
+    7. [Manage Players & Weeks](#manage-players--weeks)
+    8. [Understanding Statistics](#understanding-statistics)
+    9. [Troubleshooting](#troubleshooting)
+    """)
+    
+    # Getting Started
+    st.markdown("---")
+    st.markdown("## Getting Started")
+    
+    st.markdown("""
+    ### What is Pick'ems 2026?
+    Pick'ems 2026 is a comprehensive game outcome prediction tracking system. It allows you to:
+    - Track player predictions for weekly games
+    - Monitor accuracy statistics over time
+    - Analyze performance trends
+    - Compare players against each other
+
+    ### Navigation
+    - Use the **sidebar** to select different pages
+    - Choose your **Season Year** (2024, 2025, or 2026)
+    - Click **🔄 Refresh Data** to update information from Google Sheets
+
+    ### Data Storage
+    All data is stored in Google Sheets and automatically synced. Changes may take a few moments to appear across all pages.
+    """)
+    
+    # Enter Results
+    st.markdown("---")
+    st.markdown("## Enter Results")
+    
+    st.markdown("""
+    ### Purpose
+    Record how many games each player correctly predicted for a specific week.
+
+    ### How to Use
+
+    #### 1. Select a Week
+    - Choose from the dropdown menu showing available weeks
+    - Format: "Week [Number] ([Total Games] games) - [Date]"
+
+    #### 2. Choose Input Method
+
+    **Individual Entry:**
+    - Enter results one player at a time
+    - For each player, set:
+      - **Status**: "participated" or "omitted"
+      - **Correct Guesses**: Number from 0 to total games (only if participated)
+
+    **Bulk Text Entry:**
+    - Enter multiple results quickly using text format
+    - Format: `PlayerName: CorrectGuesses` or `PlayerName: omitted`
+    - Example:
+      ```
+      John Smith: 7
+      Jane Doe: omitted
+      Mike Johnson: 5
+      ```
+
+    #### 3. Save Results
+    - Click "Save/Update All Results" or "Save/Update Bulk Results"
+    - The system will update existing results or create new ones
+    - Success message will confirm the operation
+
+    ### Tips
+    - You can edit existing results by changing the numbers and saving again
+    - "Omitted" means the player didn't participate that week
+    - The preview in bulk entry shows exactly what will be saved
+    """)
+    
+    # Weekly Standings
+    st.markdown("---")
+    st.markdown("## Weekly Standings")
+    
+    st.markdown("""
+    ### Purpose
+    View rankings and performance for a specific week.
+
+    ### Features
+
+    #### Statistics Types
+    - **Absolute Statistics**: Includes omissions as 0 correct guesses
+    - **Adjusted Statistics**: Excludes omissions entirely
+
+    #### What You'll See
+    - Rankings based on accuracy percentage
+    - Correct/Possible scores for each player
+    - Visual bar chart comparing absolute vs adjusted performance
+    - Data sorted by performance (highest accuracy first)
+
+    ### Understanding the Data
+    - Players who omitted a week appear with 0% in absolute stats
+    - Adjusted stats only show players who actually participated
+    - The chart helps visualize the difference between the two calculation methods
+    """)
+    
+    # Season Standings
+    st.markdown("---")
+    st.markdown("## Season Standings")
+    
+    st.markdown("""
+    ### Purpose
+    View overall season performance across all weeks.
+
+    ### Features
+
+    #### Two Statistical Views
+    1. **Absolute Statistics**
+       - Includes all weeks in the season
+       - Omitted weeks count as 0 correct guesses
+       - Shows total participation commitment
+
+    2. **Adjusted Statistics**
+       - Only includes weeks where players participated
+       - Shows pure prediction accuracy
+       - Displays number of omitted weeks
+
+    #### Visualizations
+    - **Performance Bar Charts**: Separate charts for absolute and adjusted accuracy
+    - **Scatter Plot**: Compares absolute vs adjusted accuracy
+      - Points above the diagonal line = better adjusted than absolute performance
+      - Point size = number of weeks participated
+      - Color intensity = number of omitted weeks
+
+    ### Key Metrics
+    - **Rank**: Position based on accuracy percentage
+    - **Weeks**: Total weeks (absolute) or participated weeks (adjusted)
+    - **Correct/Possible**: Total correct predictions out of total possible
+    - **Accuracy %**: Percentage of correct predictions
+    - **Omitted**: Number of weeks not participated (adjusted view only)
+    """)
+    
+    # Player History
+    st.markdown("---")
+    st.markdown("## Player History")
+    
+    st.markdown("""
+    ### Purpose
+    Detailed view of an individual player's performance throughout the season.
+
+    ### Features
+
+    #### Summary Metrics
+    - **Weeks Participated**: Number of weeks with predictions
+    - **Total Correct**: Sum of all correct predictions
+    - **Total Possible**: Sum of all possible predictions
+    - **Overall Accuracy**: Season-long accuracy percentage
+
+    #### Performance Chart
+    - Line graph showing weekly accuracy over time
+    - Red dashed line indicates overall average
+    - Helps identify trends and consistency
+
+    #### Detailed History Table
+    - Week-by-week breakdown
+    - Shows correct/total predictions, accuracy, and status for each week
+    - Status indicators:
+      - ✅ Participated
+      - ⏸️ Omitted
+      - ❓ No Result
+
+    ### Use Cases
+    - Track individual improvement over time
+    - Identify best and worst performing weeks
+    - Understand participation patterns
+    """)
+    
+    # Improvement Trends
+    st.markdown("---")
+    st.markdown("## Improvement Trends")
+    
+    st.markdown("""
+    ### Purpose
+    Advanced analytics showing performance trends and patterns across all players.
+
+    ### Features
+
+    #### Overview Metrics
+    - **📈 Improving Players**: Players with positive trends
+    - **📊 Stable Players**: Players with consistent performance
+    - **📉 Declining Players**: Players with negative trends
+    - **🎯 Average Improvement**: League-wide performance change
+
+    #### Trend Analysis
+    **Player Trends Summary:**
+    - Sorted by improvement (most improved first)
+    - Shows overall accuracy, early vs recent performance
+    - Indicates trend significance and volatility
+
+    **Key Statistics:**
+    - **Overall %**: Season-long accuracy
+    - **Early %**: Average of first 3 weeks
+    - **Recent %**: Average of last 3 weeks
+    - **Change**: Difference between recent and early performance
+    - **Volatility**: Standard deviation of weekly performance
+    - **Significance**: Whether the trend is meaningful or random
+
+    #### Visualizations
+
+    **Early vs Recent Performance:**
+    - Scatter plot comparing early season to recent performance
+    - Points above diagonal line = improving players
+    - Point size = number of weeks played
+    - Colors indicate trend category
+
+    **Trend Slope Distribution:**
+    - Histogram showing distribution of improvement rates
+    - Positive slopes = improving, negative = declining
+
+    #### Individual Player Analysis
+    - Select any player for detailed trend analysis
+    - Shows weekly performance with trend line
+    - 3-week rolling average with confidence bands
+    - Performance insights and statistics
+
+    #### Multi-Player Comparison
+    - Compare multiple players on the same chart
+    - Useful for head-to-head analysis
+    - Summary table with key statistics
+
+    ### Understanding Trends
+    - **Trend Slope**: Rate of improvement per week (% per week)
+    - **R² Value**: How well the trend line fits the data (0-1)
+    - **Meaningful vs Inconclusive**: Based on slope magnitude and correlation strength
+    - **Volatility**: Lower numbers = more consistent performance
+    """)
+    
+    # Manage Players & Weeks
+    st.markdown("---")
+    st.markdown("## Manage Players & Weeks")
+    
+    st.markdown("""
+    ### Players Tab
+
+    #### Adding Players
+    1. Click "Add Players" section
+    2. Enter names in the text area (one per line)
+    3. Click "Add Players"
+    4. System prevents duplicate names
+
+    #### Managing Existing Players
+    - Each player shows in an expandable card
+    - View statistics: total weeks, participation rate
+    - **Update**: Change player name (checks for duplicates)
+    - **Delete**: Remove player and all their results
+      - Two-step confirmation process
+      - Shows warning if player has existing results
+
+    ### Weeks Tab
+
+    #### Adding Weeks
+    1. Click "Add New Week" section
+    2. Enter:
+       - **Week Number**: Must be unique for the season
+       - **Total Games**: Number of games for that week
+       - **Week Date**: Date of the week
+    3. Click "Add Week"
+
+    #### Managing Existing Weeks
+    - Each week shows in an expandable card
+    - Displays number of results already entered
+    - **Update**: Modify week number, total games, or date
+    - **Delete**: Remove week and all associated results
+      - Two-step confirmation process
+      - Shows warning if week has existing results
+
+    ### Important Notes
+    - Deleting players or weeks also removes all associated results
+    - Changes are immediate and cannot be undone
+    - The system prevents duplicate week numbers within a season
+    - All operations use batch processing for efficiency
+    """)
+    
+    # Understanding Statistics
+    st.markdown("---")
+    st.markdown("## Understanding Statistics")
+    
+    st.markdown("""
+    ### Calculation Methods
+
+    #### Absolute Statistics
+    - **Purpose**: Shows total commitment and consistency
+    - **Calculation**: Includes omitted weeks as 0 correct guesses
+    - **Use Case**: Comparing overall participation and reliability
+
+    #### Adjusted Statistics  
+    - **Purpose**: Shows pure prediction accuracy
+    - **Calculation**: Excludes omitted weeks entirely
+    - **Use Case**: Comparing forecasting skill when actually participating
+
+    ### Example
+    Player with 3 weeks:
+    - Week 1: 7/10 correct (participated)
+    - Week 2: Omitted
+    - Week 3: 6/10 correct (participated)
+
+    **Absolute**: 13/30 = 43.3% accuracy
+    **Adjusted**: 13/20 = 65.0% accuracy
+
+    ### Trend Analysis
+    - **Linear Regression**: Fits a line through weekly performance points
+    - **Slope**: Rate of change per week
+    - **Significance**: Determined by slope magnitude (≥0.75%) and correlation strength (R² ≥0.25)
+    - **Categories**:
+      - Improving: Slope > +0.5% per week
+      - Stable: Slope between -0.5% and +0.5% per week  
+      - Declining: Slope < -0.5% per week
+    """)
+    
+    # Troubleshooting
+    st.markdown("---")
+    st.markdown("## Troubleshooting")
+    
+    st.markdown("""
+    ### Common Issues
+
+    #### Data Not Loading
+    - Check internet connection
+    - Click "🔄 Refresh Data" in sidebar
+    - Verify Google Sheets permissions
+
+    #### Can't Add Players/Weeks
+    - Check for duplicate names/week numbers
+    - Ensure all required fields are filled
+    - Try refreshing the page
+
+    #### Results Not Saving
+    - Verify the week has been created first
+    - Check that player names exist
+    - Ensure correct format in bulk entry
+    - Try individual entry if bulk entry fails
+
+    #### Charts Not Displaying
+    - Ensure there's enough data (minimum 3 weeks for trends)
+    - Check that players have participated in multiple weeks
+    - Try refreshing the page
+
+    ### Best Practices
+
+    #### Data Entry
+    - Enter results promptly after each week
+    - Use consistent player names
+    - Double-check bulk entry format before saving
+    - Review data in standings pages to verify accuracy
+
+    #### Performance Analysis
+    - Wait until at least 3-4 weeks for meaningful trends
+    - Consider both absolute and adjusted statistics
+    - Use player history to understand individual patterns
+    - Compare multiple players in trend analysis
+
+    #### Data Management
+    - Regularly backup your Google Sheet
+    - Be cautious when deleting players or weeks
+    - Keep player names simple and consistent
+    - Document any special circumstances (e.g., rule changes)
+
+    ### Getting Help
+    - Use the refresh button if data seems outdated
+    - Check the preview in bulk entry before saving
+    - Review error messages carefully - they usually indicate the specific issue
+    - Contact your system administrator for Google Sheets access issues
+    """)
+    
+    # Quick Reference
+    st.markdown("---")
+    st.markdown("## Quick Reference")
+    
+    st.markdown("""
+    ### Navigation Shortcuts
+    - **Enter Results**: Record weekly predictions
+    - **Weekly Standings**: Week-specific rankings  
+    - **Season Standings**: Overall season performance
+    - **Player History**: Individual player details
+    - **Improvement Trends**: Performance analysis and trends
+    - **Manage Players & Weeks**: Add/edit players and weeks
+
+    ### Status Meanings
+    - **Participated**: Player made predictions and results are recorded
+    - **Omitted**: Player didn't participate that week
+    - **No Result**: Week exists but no result entered for this player
+
+    ### Key Statistics
+    - **Accuracy %**: (Correct Predictions ÷ Total Predictions) × 100
+    - **Trend Slope**: Rate of improvement/decline per week
+    - **Volatility**: Standard deviation of weekly performance
+    - **R² Value**: How well trend line fits the data (0-1 scale)
+
+    This comprehensive guide should help you make the most of your Pick'ems 2026 application!
+    """)
 
 # Footer
 st.markdown("---")
