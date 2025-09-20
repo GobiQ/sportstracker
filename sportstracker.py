@@ -310,6 +310,26 @@ def delete_player(spreadsheet, player_id):
         st.error(f"Error deleting player: {e}")
         return False
 
+def delete_result(spreadsheet, result_id):
+    """Delete a specific result"""
+    try:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        actual_sheet_name = existing_sheets_lower.get('results', 'results')
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to delete
+        for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
+            if str(row.get('id', '')) == str(result_id):
+                worksheet.delete_rows(i)
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error deleting result: {e}")
+        return False
+
 def update_result(spreadsheet, result_id, correct_guesses, status):
     """Update a specific result"""
     try:
@@ -1854,8 +1874,15 @@ elif page == "Edit Results":
                                                     st.warning("Click Delete again to confirm!")
                                                     st.rerun()
                                                 else:
-                                                    # Note: delete_result function needs to be implemented
-                                                    st.error("Delete result function not implemented yet.")
+                                                    if delete_result(spreadsheet, result_id):
+                                                        st.success("Result deleted!")
+                                                        if confirm_key in st.session_state:
+                                                            del st.session_state[confirm_key]
+                                                        st.cache_data.clear()
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Error deleting result.")
                                             
                                             # Cancel delete option
                                             if confirm_key in st.session_state:
