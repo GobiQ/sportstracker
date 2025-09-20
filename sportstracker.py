@@ -285,25 +285,15 @@ def update_result(spreadsheet, result_id, correct_guesses, status):
         st.error(f"Error updating result: {e}")
         return False
 
-def delete_result(spreadsheet, result_id):
-    """Delete a specific result"""
+def get_next_id(df):
+    """Get the next available ID for a dataframe"""
+    if df.empty or 'id' not in df.columns:
+        return 1
     try:
-        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
-        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
-        actual_sheet_name = existing_sheets_lower.get('results', 'results')
-        
-        worksheet = spreadsheet.worksheet(actual_sheet_name)
-        data = worksheet.get_all_records()
-        
-        # Find the row to delete
-        for i, row in enumerate(data, start=2):
-            if str(row.get('id', '')) == str(result_id):
-                worksheet.delete_rows(i)
-                return True
-        return False
-    except Exception as e:
-        st.error(f"Error deleting result: {e}")
-        return False
+        max_id = int(df['id'].astype(int).max())
+        return max_id + 1 if pd.notna(max_id) else 1
+    except:
+        return 1
 
 def calculate_standings(data, season_year, week_number=None):
     """Calculate standings with both absolute and adjusted statistics"""
@@ -512,6 +502,8 @@ page = st.sidebar.selectbox("Choose a page:", [
     "Weekly Standings", 
     "Season Standings",
     "Player History",
+    "Edit Players",
+    "Edit Results", 
     "Manage Players & Weeks"
 ])
 
@@ -1084,6 +1076,219 @@ elif page == "Player History":
             st.info(f"No history found for {selected_player} in season {current_season}.")
     else:
         st.info("No players found. Please add players first.")
+
+elif page == "Edit Players":
+    st.header("Edit Players")
+    
+    players_df = data['players'].copy()
+    if not players_df.empty:
+        st.subheader("Current Players")
+        
+        # Create editable interface
+        for _, player in players_df.iterrows():
+            player_id = int(player['id'])
+            
+            with st.expander(f"Player: {player['name']}", expanded=False):
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    new_name = st.text_input(
+                        "Name:",
+                        value=player['name'],
+                        key=f"edit_name_{player_id}"
+                    )
+                
+                with col2:
+                    if st.button("Update", key=f"update_{player_id}", type="secondary"):
+                        if new_name.strip() and new_name != player['name']:
+                            # Check if new name already exists
+                            if new_name in players_df['name'].values:
+                                st.error("A player with this name already exists!")
+                            else:
+                                if update_player_name(spreadsheet, player_id, new_name.strip()):
+                                    st.success("Player updated successfully!")
+                                    st.cache_data.clear()
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Error updating player.")
+                        elif new_name == player['name']:
+                            st.info("No changes made.")
+                        else:
+                            st.error("Please enter a valid name.")
+                
+                with col3:
+                    if st.button("Delete", key=f"delete_{player_id}", type="secondary"):
+                        # Confirm deletion
+                        if f"confirm_delete_{player_id}" not in st.session_state:
+                            st.session_state[f"confirm_delete_{player_id}"] = True
+                            st.warning("⚠️ Click Delete again to confirm. This will delete the player and ALL their results!")
+                        else:
+                            if delete_player(spreadsheet, player_id):
+                                st.success("Player and all their results deleted successfully!")
+                                del st.session_state[f"confirm_delete_{player_id}"]
+                                st.cache_data.clear()
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("Error deleting player.")
+                
+                # Show player statistics
+                results_df = data['results'].copy()
+                if not results_df.empty:
+                    results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                    player_results = results_df[results_df['player_id'] == player_id]
+                    
+                    if not player_results.empty:
+                        total_weeks = len(player_results)
+                        participated = len(player_results[player_results['status'] == 'participated'])
+                        omitted = len(player_results[player_results['status'] == 'omitted'])
+                        
+                        st.write(f"**Statistics:** {total_weeks} weeks total | {participated} participated | {omitted} omitted")
+    else:
+        st.info("No players found. Add players in the 'Manage Players & Weeks' section.")
+
+elif page == "Edit Results":
+    st.header("Edit Results")
+    
+    # Week selector
+    weeks_df = data['weeks'].copy()
+    if not weeks_df.empty:
+        weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+        weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+        
+        season_weeks = weeks_df[weeks_df['season_year'] == current_season]
+        
+        if not season_weeks.empty:
+            # Get weeks with results
+            results_df = data['results'].copy()
+            weeks_with_results = []
+            
+            if not results_df.empty:
+                results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                
+                for _, week in season_weeks.iterrows():
+                    week_id = int(week['id'])
+                    week_results = results_df[results_df['week_id'] == week_id]
+                    if not week_results.empty:
+                        weeks_with_results.append({
+                            'label': f"Week {int(week['week_number'])} ({int(week['total_games'])} games) - {week['week_date']}",
+                            'value': week_id,
+                            'week_number': int(week['week_number']),
+                            'total_games': int(week['total_games'])
+                        })
+            
+            if weeks_with_results:
+                selected_week_option = st.selectbox(
+                    "Select Week to Edit:",
+                    weeks_with_results,
+                    format_func=lambda x: x['label']
+                )
+                
+                if selected_week_option:
+                    selected_week_id = selected_week_option['value']
+                    selected_week_number = selected_week_option['week_number']
+                    total_games = selected_week_option['total_games']
+                    
+                    st.subheader(f"Edit Week {selected_week_number} Results")
+                    
+                    # Get players and results for this week
+                    players_df = data['players'].copy()
+                    
+                    if not players_df.empty and not results_df.empty:
+                        # Convert data types
+                        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                        results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
+                        
+                        # Get results for this week
+                        week_results = results_df[results_df['week_id'] == selected_week_id]
+                        
+                        if not week_results.empty:
+                            # Merge with player names
+                            week_results_with_names = week_results.merge(
+                                players_df[['id', 'name']], 
+                                left_on='player_id', 
+                                right_on='id',
+                                suffixes=('_result', '_player')
+                            )
+                            
+                            st.write("Click on a result to edit or delete it:")
+                            
+                            for _, result in week_results_with_names.iterrows():
+                                result_id = int(result['id_result'])
+                                player_name = result['name']
+                                current_status = result['status']
+                                current_correct = int(result['correct_guesses']) if pd.notna(result['correct_guesses']) else 0
+                                
+                                with st.expander(f"{player_name}: {current_correct if current_status == 'participated' else 'Omitted'}", expanded=False):
+                                    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                                    
+                                    with col1:
+                                        st.write(f"**Player:** {player_name}")
+                                    
+                                    with col2:
+                                        new_status = st.selectbox(
+                                            "Status:",
+                                            ['participated', 'omitted'],
+                                            index=0 if current_status == 'participated' else 1,
+                                            key=f"status_edit_{result_id}"
+                                        )
+                                    
+                                    with col3:
+                                        if new_status == 'participated':
+                                            new_correct = st.number_input(
+                                                f"Correct (0-{total_games}):",
+                                                min_value=0,
+                                                max_value=total_games,
+                                                value=current_correct,
+                                                key=f"correct_edit_{result_id}"
+                                            )
+                                        else:
+                                            new_correct = 0
+                                            st.write("—")
+                                    
+                                    with col4:
+                                        col4a, col4b = st.columns(2)
+                                        
+                                        with col4a:
+                                            if st.button("Update", key=f"update_result_{result_id}", type="secondary"):
+                                                if (new_status != current_status or 
+                                                    (new_status == 'participated' and new_correct != current_correct)):
+                                                    
+                                                    if update_result(spreadsheet, result_id, new_correct, new_status):
+                                                        st.success("Result updated!")
+                                                        st.cache_data.clear()
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Error updating result.")
+                                                else:
+                                                    st.info("No changes made.")
+                                        
+                                        with col4b:
+                                            if st.button("Delete", key=f"delete_result_{result_id}", type="secondary"):
+                                                if f"confirm_delete_result_{result_id}" not in st.session_state:
+                                                    st.session_state[f"confirm_delete_result_{result_id}"] = True
+                                                    st.warning("Click Delete again to confirm!")
+                                                else:
+                                                    if delete_result(spreadsheet, result_id):
+                                                        st.success("Result deleted!")
+                                                        del st.session_state[f"confirm_delete_result_{result_id}"]
+                                                        st.cache_data.clear()
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Error deleting result.")
+                        else:
+                            st.info("No results found for this week.")
+                    else:
+                        st.info("No players or results found.")
+            else:
+                st.info("No weeks with results found for the current season.")
+        else:
+            st.info("No weeks found for the current season.")
+    else:
+        st.info("No weeks found.")
 
 elif page == "Manage Players & Weeks":
     st.header("Manage Players & Weeks")
