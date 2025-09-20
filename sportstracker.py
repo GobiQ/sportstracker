@@ -509,6 +509,50 @@ def update_result_batch(spreadsheet, result_id, correct_guesses, status, spreads
         st.error(f"Error updating result: {e}")
         return False
 
+def batch_update_results_efficient(spreadsheet, updates_data, spreadsheet_id=None):
+    """Efficiently update multiple results in a single batch operation"""
+    try:
+        actual_sheet_name = get_actual_sheet_name('results', spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        # Get all current data once
+        data = worksheet.get_all_records()
+        headers = worksheet.row_values(1)
+        
+        # Prepare all updates in a single batch
+        batch_updates = []
+        
+        for result_id, correct_guesses, status in updates_data:
+            # Find the row to update
+            for i, row in enumerate(data, start=2):
+                if str(row.get('id', '')) == str(result_id):
+                    # Add updates for this result
+                    if 'correct_guesses' in headers:
+                        col_letter = chr(ord('A') + headers.index('correct_guesses'))
+                        value = correct_guesses if status != 'omitted' else ''
+                        batch_updates.append({
+                            'range': f'{col_letter}{i}',
+                            'values': [[value]]
+                        })
+                    
+                    if 'status' in headers:
+                        col_letter = chr(ord('A') + headers.index('status'))
+                        batch_updates.append({
+                            'range': f'{col_letter}{i}',
+                            'values': [[status]]
+                        })
+                    break
+        
+        # Execute all updates in a single API call
+        if batch_updates:
+            worksheet.batch_update(batch_updates)
+            return True
+        
+        return False
+    except Exception as e:
+        st.error(f"Error batch updating results: {e}")
+        return False
+
 def normalize_data_types(data):
     """Normalize data types for consistency"""
     if data.empty:
@@ -1239,7 +1283,8 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.rerun()
 
 if page == "Enter Results":
-    st.header("Enter Weekly Results")
+    st.header("Enter/Edit Weekly Results")
+    st.write("💡 **Tip:** This page allows you to both enter new results and edit existing ones. Simply adjust the numbers or status and save to override current data.")
     
     weeks_df = data['weeks'].copy()
     if not weeks_df.empty:
@@ -1358,47 +1403,72 @@ if page == "Enter Results":
                                 st.divider()
                         
                         # Save button for individual entry
-                        if st.button("Save All Results", type="primary"):
-                            # Process individual entry results
-                            batch_data = []
+                        if st.button("Save/Update All Results", type="primary"):
+                            # Process individual entry results - update existing or create new efficiently
                             results_df_for_updates = data['results'].copy()
                             
                             if not results_df_for_updates.empty:
                                 results_df_for_updates['player_id'] = results_df_for_updates['player_id'].astype(str)
                                 results_df_for_updates['week_id'] = results_df_for_updates['week_id'].astype(str)
                             
-                            for player_id, (correct_guesses, status) in results_to_save.items():
-                                result_data = {
-                                    'id': generate_id(),
-                                    'player_id': player_id,
-                                    'week_id': selected_week_id,
-                                    'correct_guesses': correct_guesses if status != 'omitted' else '',
-                                    'status': status,
-                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                }
-                                batch_data.append(result_data)
+                            # Separate updates and new results
+                            updates_to_make = []
+                            new_results = []
                             
-                            # Check for duplicates and batch save
-                            if batch_data:
-                                safe_data = check_and_prevent_duplicates(
-                                    spreadsheet, 
-                                    'results', 
-                                    batch_data, 
-                                    ['player_id', 'week_id']
+                            for player_id, (correct_guesses, status) in results_to_save.items():
+                                # Check if result already exists
+                                existing_mask = (
+                                    (results_df_for_updates['player_id'] == player_id) & 
+                                    (results_df_for_updates['week_id'] == selected_week_id)
                                 )
                                 
-                                if safe_data:
-                                    if batch_update_sheet_optimized(spreadsheet, 'results', safe_data, 'append'):
-                                        st.success(f"Saved {len(safe_data)} new results successfully!")
-                                        if len(safe_data) < len(batch_data):
-                                            st.warning(f"Skipped {len(batch_data) - len(safe_data)} duplicate results.")
-                                        st.cache_data.clear()
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error("Error saving results. Please try again.")
+                                if existing_mask.any():
+                                    # Prepare for update
+                                    existing_result = results_df_for_updates[existing_mask].iloc[0]
+                                    result_id = str(existing_result['id'])
+                                    updates_to_make.append((result_id, correct_guesses, status))
                                 else:
-                                    st.info("No new results to save. All results already exist for this week.")
+                                    # Prepare for creation
+                                    result_data = {
+                                        'id': generate_id(),
+                                        'player_id': player_id,
+                                        'week_id': selected_week_id,
+                                        'correct_guesses': correct_guesses if status != 'omitted' else '',
+                                        'status': status,
+                                        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    }
+                                    new_results.append(result_data)
+                            
+                            # Execute updates efficiently (single API call)
+                            updated_count = 0
+                            if updates_to_make:
+                                if batch_update_results_efficient(spreadsheet, updates_to_make):
+                                    updated_count = len(updates_to_make)
+                                else:
+                                    st.error("Error updating existing results. Please try again.")
+                            
+                            # Create new results efficiently (single API call)
+                            created_count = 0
+                            if new_results:
+                                if batch_update_sheet_optimized(spreadsheet, 'results', new_results, 'append'):
+                                    created_count = len(new_results)
+                                else:
+                                    st.error("Error creating new results. Please try again.")
+                            
+                            # Show success message
+                            if updated_count > 0 or created_count > 0:
+                                message_parts = []
+                                if updated_count > 0:
+                                    message_parts.append(f"Updated {updated_count} existing results")
+                                if created_count > 0:
+                                    message_parts.append(f"Created {created_count} new results")
+                                
+                                st.success(" ".join(message_parts) + "!")
+                                st.cache_data.clear()
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.info("No changes made to any results.")
                     
                     else:  # Bulk Text Entry
                         st.write("**Bulk Text Entry**")
@@ -1493,9 +1563,8 @@ Sarah Wilson: 9""")
                             
                             # Save button for bulk entry
                             if parsed_results and not parse_errors:
-                                if st.button("Save Bulk Results", type="primary"):
-                                    # Process bulk entry results
-                                    batch_data = []
+                                if st.button("Save/Update Bulk Results", type="primary"):
+                                    # Process bulk entry results - update existing or create new efficiently
                                     results_df_for_updates = data['results'].copy()
                                     
                                     if not results_df_for_updates.empty:
@@ -1503,44 +1572,64 @@ Sarah Wilson: 9""")
                                         results_df_for_updates['player_id'] = results_df_for_updates['player_id'].astype(str)
                                         results_df_for_updates['week_id'] = results_df_for_updates['week_id'].astype(str)
                                     
-                                    next_id = get_next_id(data['results'])
+                                    # Separate updates and new results
+                                    updates_to_make = []
+                                    new_results = []
                                     
                                     for player_id, (correct_guesses, status) in parsed_results.items():
                                         # Check if result already exists
-                                        existing = False
-                                        if not results_df_for_updates.empty:
-                                            existing_mask = (
-                                                (results_df_for_updates['player_id'] == player_id) & 
-                                                (results_df_for_updates['week_id'] == selected_week_id)
-                                            )
-                                            if existing_mask.any():
-                                                existing = True
+                                        existing_mask = (
+                                            (results_df_for_updates['player_id'] == player_id) & 
+                                            (results_df_for_updates['week_id'] == selected_week_id)
+                                        )
                                         
-                                        if not existing:
-                                            # Add new result
+                                        if existing_mask.any():
+                                            # Prepare for update
+                                            existing_result = results_df_for_updates[existing_mask].iloc[0]
+                                            result_id = str(existing_result['id'])
+                                            updates_to_make.append((result_id, correct_guesses, status))
+                                        else:
+                                            # Prepare for creation
                                             result_data = {
-                                                'id': next_id,
+                                                'id': generate_id(),
                                                 'player_id': player_id,
                                                 'week_id': selected_week_id,
                                                 'correct_guesses': correct_guesses if status != 'omitted' else '',
                                                 'status': status,
                                                 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                             }
-                                            batch_data.append(result_data)
-                                            next_id += 1
+                                            new_results.append(result_data)
                                     
-                                    # Batch save all new results
-                                    if batch_data:
-                                        if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
-                                            st.success(f"Saved {len(batch_data)} results successfully!")
-                                            # Clear cache to reload data
-                                            st.cache_data.clear()
-                                            time.sleep(1)
-                                            st.rerun()
+                                    # Execute updates efficiently (single API call)
+                                    updated_count = 0
+                                    if updates_to_make:
+                                        if batch_update_results_efficient(spreadsheet, updates_to_make):
+                                            updated_count = len(updates_to_make)
                                         else:
-                                            st.error("Error saving results. Please try again.")
+                                            st.error("Error updating existing results. Please try again.")
+                                    
+                                    # Create new results efficiently (single API call)
+                                    created_count = 0
+                                    if new_results:
+                                        if batch_update_sheet_optimized(spreadsheet, 'results', new_results, 'append'):
+                                            created_count = len(new_results)
+                                        else:
+                                            st.error("Error creating new results. Please try again.")
+                                    
+                                    # Show success message
+                                    if updated_count > 0 or created_count > 0:
+                                        message_parts = []
+                                        if updated_count > 0:
+                                            message_parts.append(f"Updated {updated_count} existing results")
+                                        if created_count > 0:
+                                            message_parts.append(f"Created {created_count} new results")
+                                        
+                                        st.success(" ".join(message_parts) + "!")
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
                                     else:
-                                        st.info("No new results to save. All specified players already have results for this week.")
+                                        st.info("No changes made to any results.")
                             
                             elif not parsed_results and not parse_errors:
                                 st.info("Enter some results above to see the preview.")
