@@ -1612,7 +1612,7 @@ elif page == "Weekly Standings":
                     
                     # Visualization
                     fig = px.bar(
-                        standings_df.head(10), 
+                        standings_df, 
                         x='player_name', 
                         y=['accuracy_absolute', 'accuracy_adjusted'],
                         title=f'Week {selected_week} - Accuracy Comparison',
@@ -1668,7 +1668,7 @@ elif page == "Season Standings":
         
         with col1:
             fig1 = px.bar(
-                standings_df.head(10), 
+                standings_df, 
                 x='player_name', 
                 y='accuracy_absolute',
                 title='Season Absolute Accuracy',
@@ -1680,7 +1680,7 @@ elif page == "Season Standings":
         
         with col2:
             fig2 = px.bar(
-                standings_df.head(10), 
+                standings_df, 
                 x='player_name', 
                 y='accuracy_adjusted',
                 title='Season Adjusted Accuracy',
