@@ -1084,22 +1084,29 @@ elif page == "Edit Players":
     if not players_df.empty:
         st.subheader("Current Players")
         
+        # Initialize session state for editing if not exists
+        if 'editing_player' not in st.session_state:
+            st.session_state.editing_player = None
+        
         # Create editable interface
         for _, player in players_df.iterrows():
             player_id = int(player['id'])
             
             with st.expander(f"Player: {player['name']}", expanded=False):
+                # Create unique keys using timestamp or counter
+                unique_suffix = f"{player_id}_{hash(str(player['name']))}"
+                
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
                     new_name = st.text_input(
                         "Name:",
                         value=player['name'],
-                        key=f"edit_name_{player_id}"
+                        key=f"edit_name_{unique_suffix}"
                     )
                 
                 with col2:
-                    if st.button("Update", key=f"update_{player_id}", type="secondary"):
+                    if st.button("Update", key=f"update_{unique_suffix}", type="secondary"):
                         if new_name.strip() and new_name != player['name']:
                             # Check if new name already exists
                             if new_name in players_df['name'].values:
@@ -1118,20 +1125,31 @@ elif page == "Edit Players":
                             st.error("Please enter a valid name.")
                 
                 with col3:
-                    if st.button("Delete", key=f"delete_{player_id}", type="secondary"):
+                    delete_key = f"delete_{unique_suffix}"
+                    confirm_key = f"confirm_delete_{player_id}"
+                    
+                    if st.button("Delete", key=delete_key, type="secondary"):
                         # Confirm deletion
-                        if f"confirm_delete_{player_id}" not in st.session_state:
-                            st.session_state[f"confirm_delete_{player_id}"] = True
+                        if confirm_key not in st.session_state:
+                            st.session_state[confirm_key] = True
                             st.warning("⚠️ Click Delete again to confirm. This will delete the player and ALL their results!")
+                            st.rerun()
                         else:
                             if delete_player(spreadsheet, player_id):
                                 st.success("Player and all their results deleted successfully!")
-                                del st.session_state[f"confirm_delete_{player_id}"]
+                                if confirm_key in st.session_state:
+                                    del st.session_state[confirm_key]
                                 st.cache_data.clear()
                                 time.sleep(1)
                                 st.rerun()
                             else:
                                 st.error("Error deleting player.")
+                
+                # Clear confirmation if user clicks away
+                if confirm_key in st.session_state:
+                    if st.button("Cancel Delete", key=f"cancel_{unique_suffix}"):
+                        del st.session_state[confirm_key]
+                        st.rerun()
                 
                 # Show player statistics
                 results_df = data['results'].copy()
@@ -1150,6 +1168,10 @@ elif page == "Edit Players":
 
 elif page == "Edit Results":
     st.header("Edit Results")
+    
+    # Initialize session state for editing if not exists
+    if 'editing_result' not in st.session_state:
+        st.session_state.editing_result = None
     
     # Week selector
     weeks_df = data['weeks'].copy()
@@ -1182,7 +1204,8 @@ elif page == "Edit Results":
                 selected_week_option = st.selectbox(
                     "Select Week to Edit:",
                     weeks_with_results,
-                    format_func=lambda x: x['label']
+                    format_func=lambda x: x['label'],
+                    key="edit_results_week_selector"
                 )
                 
                 if selected_week_option:
@@ -1220,6 +1243,9 @@ elif page == "Edit Results":
                                 current_status = result['status']
                                 current_correct = int(result['correct_guesses']) if pd.notna(result['correct_guesses']) else 0
                                 
+                                # Create unique keys
+                                unique_suffix = f"{result_id}_{selected_week_id}_{hash(player_name)}"
+                                
                                 with st.expander(f"{player_name}: {current_correct if current_status == 'participated' else 'Omitted'}", expanded=False):
                                     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                                     
@@ -1231,7 +1257,7 @@ elif page == "Edit Results":
                                             "Status:",
                                             ['participated', 'omitted'],
                                             index=0 if current_status == 'participated' else 1,
-                                            key=f"status_edit_{result_id}"
+                                            key=f"status_edit_{unique_suffix}"
                                         )
                                     
                                     with col3:
@@ -1241,7 +1267,7 @@ elif page == "Edit Results":
                                                 min_value=0,
                                                 max_value=total_games,
                                                 value=current_correct,
-                                                key=f"correct_edit_{result_id}"
+                                                key=f"correct_edit_{unique_suffix}"
                                             )
                                         else:
                                             new_correct = 0
@@ -1251,7 +1277,7 @@ elif page == "Edit Results":
                                         col4a, col4b = st.columns(2)
                                         
                                         with col4a:
-                                            if st.button("Update", key=f"update_result_{result_id}", type="secondary"):
+                                            if st.button("Update", key=f"update_result_{unique_suffix}", type="secondary"):
                                                 if (new_status != current_status or 
                                                     (new_status == 'participated' and new_correct != current_correct)):
                                                     
@@ -1266,19 +1292,30 @@ elif page == "Edit Results":
                                                     st.info("No changes made.")
                                         
                                         with col4b:
-                                            if st.button("Delete", key=f"delete_result_{result_id}", type="secondary"):
-                                                if f"confirm_delete_result_{result_id}" not in st.session_state:
-                                                    st.session_state[f"confirm_delete_result_{result_id}"] = True
+                                            delete_key = f"delete_result_{unique_suffix}"
+                                            confirm_key = f"confirm_delete_result_{result_id}"
+                                            
+                                            if st.button("Delete", key=delete_key, type="secondary"):
+                                                if confirm_key not in st.session_state:
+                                                    st.session_state[confirm_key] = True
                                                     st.warning("Click Delete again to confirm!")
+                                                    st.rerun()
                                                 else:
                                                     if delete_result(spreadsheet, result_id):
                                                         st.success("Result deleted!")
-                                                        del st.session_state[f"confirm_delete_result_{result_id}"]
+                                                        if confirm_key in st.session_state:
+                                                            del st.session_state[confirm_key]
                                                         st.cache_data.clear()
                                                         time.sleep(1)
                                                         st.rerun()
                                                     else:
                                                         st.error("Error deleting result.")
+                                            
+                                            # Cancel delete option
+                                            if confirm_key in st.session_state:
+                                                if st.button("Cancel", key=f"cancel_delete_{unique_suffix}"):
+                                                    del st.session_state[confirm_key]
+                                                    st.rerun()
                         else:
                             st.info("No results found for this week.")
                     else:
