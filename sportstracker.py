@@ -9,7 +9,6 @@ from google.oauth2.service_account import Credentials
 import json
 import time
 import numpy as np
-from scipy import stats
 
 # Streamlit App Configuration
 st.set_page_config(
@@ -106,6 +105,61 @@ def get_all_data(spreadsheet_id):
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return {'players': pd.DataFrame(), 'weeks': pd.DataFrame(), 'results': pd.DataFrame()}
+
+def linear_regression(x, y):
+    """Calculate linear regression without scipy dependency"""
+    try:
+        x = np.array(x)
+        y = np.array(y)
+        
+        if len(x) < 2 or len(y) < 2 or len(x) != len(y):
+            return 0, 0, 0, 1, 0
+        
+        n = len(x)
+        sum_x = np.sum(x)
+        sum_y = np.sum(y)
+        sum_xy = np.sum(x * y)
+        sum_x2 = np.sum(x * x)
+        sum_y2 = np.sum(y * y)
+        
+        # Calculate slope (m) and intercept (b)
+        denominator = n * sum_x2 - sum_x * sum_x
+        if denominator == 0:
+            return 0, np.mean(y), 0, 1, 0
+        
+        slope = (n * sum_xy - sum_x * sum_y) / denominator
+        intercept = (sum_y - slope * sum_x) / n
+        
+        # Calculate correlation coefficient (r)
+        numerator_r = n * sum_xy - sum_x * sum_y
+        denominator_r = np.sqrt((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y))
+        
+        if denominator_r == 0:
+            r_value = 0
+        else:
+            r_value = numerator_r / denominator_r
+        
+        # Calculate p-value (simplified approximation)
+        if n > 2:
+            t_stat = r_value * np.sqrt((n - 2) / (1 - r_value**2)) if abs(r_value) < 1 else 0
+            # Simplified p-value approximation
+            p_value = 0.05 if abs(t_stat) > 2 else 0.2  # Very rough approximation
+        else:
+            p_value = 1
+        
+        # Calculate standard error (simplified)
+        if n > 2:
+            y_pred = slope * x + intercept
+            residuals = y - y_pred
+            mse = np.sum(residuals**2) / (n - 2)
+            std_err = np.sqrt(mse / np.sum((x - np.mean(x))**2)) if np.sum((x - np.mean(x))**2) > 0 else 0
+        else:
+            std_err = 0
+        
+        return slope, intercept, r_value, p_value, std_err
+        
+    except Exception:
+        return 0, 0, 0, 1, 0
 
 def ensure_sheets_exist(spreadsheet):
     """Ensure all required sheets exist in the Google Sheet"""
@@ -530,7 +584,7 @@ def calculate_improvement_trends(data, season_year, min_weeks=3):
             accuracies = player_weeks['accuracy'].values
             
             # Linear regression to find trend
-            slope, intercept, r_value, p_value, std_err = stats.linregress(weeks, accuracies)
+            slope, intercept, r_value, p_value, std_err = linear_regression(weeks, accuracies)
             
             # Calculate performance metrics
             early_avg = player_weeks.head(min_weeks)['accuracy'].mean()
