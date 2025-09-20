@@ -1273,7 +1273,7 @@ page = st.sidebar.selectbox("Choose a page:", [
 ])
 
 # Get current season year
-current_season = st.sidebar.selectbox("Season Year:", [2024, 2025, 2026], index=1)
+current_season = st.sidebar.selectbox("Season Year:", [2024, 2025, 2026], index=2)
 
 # Add refresh button
 if st.sidebar.button("🔄 Refresh Data"):
