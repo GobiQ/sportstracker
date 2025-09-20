@@ -492,8 +492,8 @@ if 'data_loaded_time' not in st.session_state or (datetime.now() - st.session_st
 
 data = st.session_state.data
 
-st.title("🏆 Youth Home Sports Prediction Tracker")
-st.markdown("Track weekly sports prediction results with omission handling")
+st.title("🏆 Pick'ems 2026")
+st.markdown("Game Outcome Prediction Accuracy Metrics")
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
