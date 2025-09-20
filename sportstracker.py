@@ -3,7 +3,9 @@ import pandas as pd
 from datetime import datetime, date
 import plotly.express as px
 import plotly.graph_objects as go
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
+import json
 
 # Streamlit App Configuration
 st.set_page_config(
@@ -16,39 +18,127 @@ st.set_page_config(
 # Initialize Google Sheets connection
 @st.cache_resource
 def init_connection():
-    return st.connection("gsheets", type=GSheetsConnection)
-
-def ensure_sheets_exist(conn):
-    """Ensure all required sheets exist in the Google Sheet"""
+    """Initialize Google Sheets connection using gspread"""
     try:
-        # Try to read each sheet, create if doesn't exist
-        sheets_to_create = {
-            'players': pd.DataFrame(columns=['id', 'name', 'created_at']),
-            'games': pd.DataFrame(columns=['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at']),
-            'predictions': pd.DataFrame(columns=['id', 'player_id', 'game_id', 'predicted_winner', 'is_correct', 'created_at'])
+        # Get credentials from Streamlit secrets
+        credentials_info = {
+            "type": st.secrets["connections"]["gsheets"]["type"],
+            "project_id": st.secrets["connections"]["gsheets"]["project_id"],
+            "private_key_id": st.secrets["connections"]["gsheets"]["private_key_id"],
+            "private_key": st.secrets["connections"]["gsheets"]["private_key"],
+            "client_email": st.secrets["connections"]["gsheets"]["client_email"],
+            "client_id": st.secrets["connections"]["gsheets"]["client_id"],
+            "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
+            "token_uri": st.secrets["connections"]["gsheets"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["connections"]["gsheets"]["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"]
         }
         
-        for sheet_name, default_df in sheets_to_create.items():
-            try:
-                conn.read(worksheet=sheet_name)
-            except:
-                # Sheet doesn't exist, create it
-                conn.create(worksheet=sheet_name, data=default_df)
+        # Create credentials
+        credentials = Credentials.from_service_account_info(
+            credentials_info,
+            scopes=['https://spreadsheets.google.com/feeds',
+                   'https://www.googleapis.com/auth/drive']
+        )
+        
+        # Create gspread client
+        gc = gspread.authorize(credentials)
+        
+        # Open spreadsheet
+        spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        spreadsheet = gc.open_by_key(spreadsheet_id)
+        
+        return spreadsheet
+    except Exception as e:
+        st.error(f"Error connecting to Google Sheets: {e}")
+        return None
+
+def ensure_sheets_exist(spreadsheet):
+    """Ensure all required sheets exist in the Google Sheet"""
+    try:
+        required_sheets = ['players', 'games', 'predictions']
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        
+        for sheet_name in required_sheets:
+            if sheet_name not in existing_sheets:
+                # Create the sheet
+                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=10)
                 
+                # Add headers based on sheet type
+                if sheet_name == 'players':
+                    worksheet.append_row(['id', 'name', 'created_at'])
+                elif sheet_name == 'games':
+                    worksheet.append_row(['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'])
+                elif sheet_name == 'predictions':
+                    worksheet.append_row(['id', 'player_id', 'game_id', 'predicted_winner', 'is_correct', 'created_at'])
+        
+        return True
     except Exception as e:
         st.error(f"Error setting up sheets: {e}")
-        st.info("Please make sure you have a Google Sheet set up and the connection is properly configured.")
+        return False
+
+def get_worksheet_data(spreadsheet, sheet_name):
+    """Get data from a specific worksheet"""
+    try:
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_records()
+        return pd.DataFrame(data)
+    except:
+        return pd.DataFrame()
+
+def append_to_worksheet(spreadsheet, sheet_name, data_dict):
+    """Append a row to a worksheet"""
+    try:
+        worksheet = spreadsheet.worksheet(sheet_name)
+        
+        # Get headers to ensure correct order
+        headers = worksheet.row_values(1)
+        
+        # Create row in correct order
+        row = [data_dict.get(header, '') for header in headers]
+        
+        worksheet.append_row(row)
+        return True
+    except Exception as e:
+        st.error(f"Error adding data to {sheet_name}: {e}")
+        return False
+
+def update_worksheet_row(spreadsheet, sheet_name, row_id, updates):
+    """Update a specific row in a worksheet"""
+    try:
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
+            if row['id'] == row_id:
+                # Update specific cells
+                for column, value in updates.items():
+                    # Find column index
+                    headers = worksheet.row_values(1)
+                    if column in headers:
+                        col_index = headers.index(column) + 1
+                        worksheet.update_cell(i, col_index, value)
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating {sheet_name}: {e}")
+        return False
 
 def get_next_id(df):
     """Get the next available ID for a dataframe"""
     if df.empty or 'id' not in df.columns:
         return 1
-    return df['id'].max() + 1 if not df['id'].isna().all() else 1
+    try:
+        max_id = df['id'].astype(int).max()
+        return max_id + 1 if pd.notna(max_id) else 1
+    except:
+        return 1
 
-def add_player(conn, name):
+def add_player(spreadsheet, name):
     """Add a new player to the players sheet"""
     try:
-        players_df = conn.read(worksheet="players")
+        players_df = get_worksheet_data(spreadsheet, 'players')
         
         # Check if player already exists
         if not players_df.empty and name in players_df['name'].values:
@@ -56,65 +146,58 @@ def add_player(conn, name):
         
         # Add new player
         new_id = get_next_id(players_df)
-        new_player = pd.DataFrame({
-            'id': [new_id],
-            'name': [name],
-            'created_at': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        })
+        player_data = {
+            'id': new_id,
+            'name': name,
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        if players_df.empty:
-            updated_df = new_player
-        else:
-            updated_df = pd.concat([players_df, new_player], ignore_index=True)
-        
-        conn.update(worksheet="players", data=updated_df)
-        return True
+        return append_to_worksheet(spreadsheet, 'players', player_data)
     except Exception as e:
         st.error(f"Error adding player: {e}")
         return False
 
-def get_players(conn):
+def get_players(spreadsheet):
     """Get all players from the players sheet"""
-    try:
-        return conn.read(worksheet="players")
-    except:
-        return pd.DataFrame(columns=['id', 'name', 'created_at'])
+    return get_worksheet_data(spreadsheet, 'players')
 
-def add_game(conn, week_number, game_date, team1, team2, season_year):
+def add_game(spreadsheet, week_number, game_date, team1, team2, season_year):
     """Add a new game to the games sheet"""
     try:
-        games_df = conn.read(worksheet="games")
+        games_df = get_worksheet_data(spreadsheet, 'games')
         
         new_id = get_next_id(games_df)
-        new_game = pd.DataFrame({
-            'id': [new_id],
-            'week_number': [week_number],
-            'game_date': [game_date.strftime('%Y-%m-%d')],
-            'team1': [team1],
-            'team2': [team2],
-            'actual_winner': [None],
-            'season_year': [season_year],
-            'created_at': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        })
+        game_data = {
+            'id': new_id,
+            'week_number': week_number,
+            'game_date': game_date.strftime('%Y-%m-%d'),
+            'team1': team1,
+            'team2': team2,
+            'actual_winner': '',
+            'season_year': season_year,
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        if games_df.empty:
-            updated_df = new_game
-        else:
-            updated_df = pd.concat([games_df, new_game], ignore_index=True)
-        
-        conn.update(worksheet="games", data=updated_df)
-        return True
+        return append_to_worksheet(spreadsheet, 'games', game_data)
     except Exception as e:
         st.error(f"Error adding game: {e}")
         return False
 
-def get_games(conn, season_year=None, week_number=None):
+def get_games(spreadsheet, season_year=None, week_number=None):
     """Get games from the games sheet with optional filters"""
     try:
-        games_df = conn.read(worksheet="games")
+        games_df = get_worksheet_data(spreadsheet, 'games')
         
         if games_df.empty:
-            return pd.DataFrame(columns=['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'])
+            return pd.DataFrame()
+        
+        # Convert data types
+        if 'season_year' in games_df.columns:
+            games_df['season_year'] = pd.to_numeric(games_df['season_year'], errors='coerce')
+        if 'week_number' in games_df.columns:
+            games_df['week_number'] = pd.to_numeric(games_df['week_number'], errors='coerce')
+        if 'id' in games_df.columns:
+            games_df['id'] = pd.to_numeric(games_df['id'], errors='coerce')
         
         # Apply filters
         if season_year is not None:
@@ -123,100 +206,108 @@ def get_games(conn, season_year=None, week_number=None):
             games_df = games_df[games_df['week_number'] == week_number]
         
         return games_df.sort_values(['week_number', 'game_date'])
-    except:
-        return pd.DataFrame(columns=['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'])
+    except Exception as e:
+        st.error(f"Error getting games: {e}")
+        return pd.DataFrame()
 
-def update_game_result(conn, game_id, actual_winner):
+def update_game_result(spreadsheet, game_id, actual_winner):
     """Update the actual winner of a game and recalculate predictions"""
     try:
         # Update games sheet
-        games_df = conn.read(worksheet="games")
-        games_df.loc[games_df['id'] == game_id, 'actual_winner'] = actual_winner
-        conn.update(worksheet="games", data=games_df)
+        success = update_worksheet_row(spreadsheet, 'games', game_id, {'actual_winner': actual_winner})
         
-        # Update predictions correctness
-        predictions_df = conn.read(worksheet="predictions")
-        if not predictions_df.empty:
-            mask = predictions_df['game_id'] == game_id
-            predictions_df.loc[mask, 'is_correct'] = (predictions_df.loc[mask, 'predicted_winner'] == actual_winner)
-            conn.update(worksheet="predictions", data=predictions_df)
+        if success:
+            # Update predictions correctness
+            predictions_df = get_worksheet_data(spreadsheet, 'predictions')
+            if not predictions_df.empty:
+                # Convert game_id to proper type for comparison
+                predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+                game_predictions = predictions_df[predictions_df['game_id'] == game_id]
+                
+                for _, prediction in game_predictions.iterrows():
+                    is_correct = prediction['predicted_winner'] == actual_winner
+                    update_worksheet_row(spreadsheet, 'predictions', prediction['id'], {'is_correct': is_correct})
         
-        return True
+        return success
     except Exception as e:
         st.error(f"Error updating game result: {e}")
         return False
 
-def add_prediction(conn, player_id, game_id, predicted_winner):
+def add_prediction(spreadsheet, player_id, game_id, predicted_winner):
     """Add or update a player's prediction for a game"""
     try:
-        predictions_df = conn.read(worksheet="predictions")
+        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
         
         # Check if prediction already exists
         if not predictions_df.empty:
+            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
+            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+            
             existing_mask = (predictions_df['player_id'] == player_id) & (predictions_df['game_id'] == game_id)
             if existing_mask.any():
                 # Update existing prediction
-                predictions_df.loc[existing_mask, 'predicted_winner'] = predicted_winner
-                predictions_df.loc[existing_mask, 'is_correct'] = None  # Will be calculated when game result is entered
-                conn.update(worksheet="predictions", data=predictions_df)
-                return True
+                existing_prediction = predictions_df[existing_mask].iloc[0]
+                return update_worksheet_row(spreadsheet, 'predictions', existing_prediction['id'], 
+                                          {'predicted_winner': predicted_winner, 'is_correct': ''})
         
         # Add new prediction
         new_id = get_next_id(predictions_df)
-        new_prediction = pd.DataFrame({
-            'id': [new_id],
-            'player_id': [player_id],
-            'game_id': [game_id],
-            'predicted_winner': [predicted_winner],
-            'is_correct': [None],
-            'created_at': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        })
+        prediction_data = {
+            'id': new_id,
+            'player_id': player_id,
+            'game_id': game_id,
+            'predicted_winner': predicted_winner,
+            'is_correct': '',
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        if predictions_df.empty:
-            updated_df = new_prediction
-        else:
-            updated_df = pd.concat([predictions_df, new_prediction], ignore_index=True)
-        
-        conn.update(worksheet="predictions", data=updated_df)
-        return True
+        return append_to_worksheet(spreadsheet, 'predictions', prediction_data)
     except Exception as e:
         st.error(f"Error adding prediction: {e}")
         return False
 
-def get_weekly_standings(conn, season_year, week_number):
+def get_weekly_standings(spreadsheet, season_year, week_number):
     """Get weekly standings for a specific week"""
     try:
-        players_df = conn.read(worksheet="players")
-        games_df = conn.read(worksheet="games")
-        predictions_df = conn.read(worksheet="predictions")
+        players_df = get_players(spreadsheet)
+        games_df = get_games(spreadsheet, season_year=season_year, week_number=week_number)
+        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
         
         if players_df.empty or games_df.empty:
             return pd.DataFrame()
         
-        # Filter games for the specific week and season with results
-        week_games = games_df[
-            (games_df['season_year'] == season_year) & 
-            (games_df['week_number'] == week_number) & 
-            (games_df['actual_winner'].notna())
-        ]
+        # Filter games with results
+        games_with_results = games_df[games_df['actual_winner'].notna() & (games_df['actual_winner'] != '')]
         
-        if week_games.empty:
+        if games_with_results.empty:
             return pd.DataFrame()
+        
+        # Convert data types
+        if not predictions_df.empty:
+            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
+            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+            predictions_df['is_correct'] = predictions_df['is_correct'].astype(str).map({'True': True, 'False': False})
         
         # Calculate standings
         standings = []
         for _, player in players_df.iterrows():
-            player_predictions = predictions_df[
-                (predictions_df['player_id'] == player['id']) & 
-                (predictions_df['game_id'].isin(week_games['id']))
-            ]
-            
-            total_predictions = len(player_predictions)
-            if total_predictions > 0:
-                correct_predictions = player_predictions['is_correct'].sum()
-                incorrect_predictions = total_predictions - correct_predictions
-                accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+            if not predictions_df.empty:
+                player_predictions = predictions_df[
+                    (predictions_df['player_id'] == player['id']) & 
+                    (predictions_df['game_id'].isin(games_with_results['id']))
+                ]
+                
+                total_predictions = len(player_predictions)
+                if total_predictions > 0:
+                    correct_predictions = player_predictions['is_correct'].sum()
+                    incorrect_predictions = total_predictions - correct_predictions
+                    accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+                else:
+                    correct_predictions = 0
+                    incorrect_predictions = 0
+                    accuracy_percentage = 0
             else:
+                total_predictions = 0
                 correct_predictions = 0
                 incorrect_predictions = 0
                 accuracy_percentage = 0
@@ -235,39 +326,48 @@ def get_weekly_standings(conn, season_year, week_number):
         st.error(f"Error getting weekly standings: {e}")
         return pd.DataFrame()
 
-def get_season_standings(conn, season_year):
+def get_season_standings(spreadsheet, season_year):
     """Get season standings"""
     try:
-        players_df = conn.read(worksheet="players")
-        games_df = conn.read(worksheet="games")
-        predictions_df = conn.read(worksheet="predictions")
+        players_df = get_players(spreadsheet)
+        games_df = get_games(spreadsheet, season_year=season_year)
+        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
         
         if players_df.empty or games_df.empty:
             return pd.DataFrame()
         
-        # Filter games for the season with results
-        season_games = games_df[
-            (games_df['season_year'] == season_year) & 
-            (games_df['actual_winner'].notna())
-        ]
+        # Filter games with results
+        games_with_results = games_df[games_df['actual_winner'].notna() & (games_df['actual_winner'] != '')]
         
-        if season_games.empty:
+        if games_with_results.empty:
             return pd.DataFrame()
+        
+        # Convert data types
+        if not predictions_df.empty:
+            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
+            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+            predictions_df['is_correct'] = predictions_df['is_correct'].astype(str).map({'True': True, 'False': False})
         
         # Calculate standings
         standings = []
         for _, player in players_df.iterrows():
-            player_predictions = predictions_df[
-                (predictions_df['player_id'] == player['id']) & 
-                (predictions_df['game_id'].isin(season_games['id']))
-            ]
-            
-            total_predictions = len(player_predictions)
-            if total_predictions > 0:
-                correct_predictions = player_predictions['is_correct'].sum()
-                incorrect_predictions = total_predictions - correct_predictions
-                accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+            if not predictions_df.empty:
+                player_predictions = predictions_df[
+                    (predictions_df['player_id'] == player['id']) & 
+                    (predictions_df['game_id'].isin(games_with_results['id']))
+                ]
+                
+                total_predictions = len(player_predictions)
+                if total_predictions > 0:
+                    correct_predictions = player_predictions['is_correct'].sum()
+                    incorrect_predictions = total_predictions - correct_predictions
+                    accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+                else:
+                    correct_predictions = 0
+                    incorrect_predictions = 0
+                    accuracy_percentage = 0
             else:
+                total_predictions = 0
                 correct_predictions = 0
                 incorrect_predictions = 0
                 accuracy_percentage = 0
@@ -286,12 +386,12 @@ def get_season_standings(conn, season_year):
         st.error(f"Error getting season standings: {e}")
         return pd.DataFrame()
 
-def get_player_history(conn, player_name, season_year):
+def get_player_history(spreadsheet, player_name, season_year):
     """Get a player's prediction history"""
     try:
-        players_df = conn.read(worksheet="players")
-        games_df = conn.read(worksheet="games")
-        predictions_df = conn.read(worksheet="predictions")
+        players_df = get_players(spreadsheet)
+        games_df = get_games(spreadsheet, season_year=season_year)
+        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
         
         if players_df.empty or games_df.empty:
             return pd.DataFrame()
@@ -303,15 +403,25 @@ def get_player_history(conn, player_name, season_year):
         
         player_id = player_row.iloc[0]['id']
         
+        if predictions_df.empty:
+            return pd.DataFrame()
+        
+        # Convert data types
+        predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
+        predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+        games_df['id'] = pd.to_numeric(games_df['id'], errors='coerce')
+        
         # Get player's predictions for the season
         player_predictions = predictions_df[predictions_df['player_id'] == player_id]
-        season_games = games_df[games_df['season_year'] == season_year]
         
-        # Merge data
-        history = player_predictions.merge(season_games, left_on='game_id', right_on='id', suffixes=('_pred', '_game'))
+        # Merge with games data
+        history = player_predictions.merge(games_df, left_on='game_id', right_on='id', suffixes=('_pred', '_game'))
         
         if history.empty:
             return pd.DataFrame()
+        
+        # Convert is_correct to proper boolean
+        history['is_correct'] = history['is_correct'].astype(str).map({'True': True, 'False': False, '': None})
         
         # Select and rename columns
         history = history[[
@@ -325,13 +435,20 @@ def get_player_history(conn, player_name, season_year):
         return pd.DataFrame()
 
 # Initialize connection
-conn = init_connection()
+spreadsheet = init_connection()
 
-# Initialize session state for better performance
+if spreadsheet is None:
+    st.error("Could not connect to Google Sheets. Please check your configuration.")
+    st.stop()
+
+# Initialize sheets
 if 'sheets_initialized' not in st.session_state:
     with st.spinner("Setting up Google Sheets..."):
-        ensure_sheets_exist(conn)
-    st.session_state.sheets_initialized = True
+        if ensure_sheets_exist(spreadsheet):
+            st.session_state.sheets_initialized = True
+        else:
+            st.error("Could not set up Google Sheets. Please check your permissions.")
+            st.stop()
 
 st.title("🏆 Youth Home Sports Prediction Tracker")
 st.markdown("Track weekly sports predictions and maintain season-long leaderboards")
@@ -354,7 +471,7 @@ if page == "Weekly Predictions":
     st.header("Weekly Predictions")
     
     # Get available weeks for current season
-    games_df = get_games(conn, season_year=current_season)
+    games_df = get_games(spreadsheet, season_year=current_season)
     if not games_df.empty:
         available_weeks = sorted(games_df['week_number'].unique())
         selected_week = st.selectbox("Select Week:", available_weeks)
@@ -363,7 +480,7 @@ if page == "Weekly Predictions":
         week_games = games_df[games_df['week_number'] == selected_week]
         
         if not week_games.empty:
-            players_df = get_players(conn)
+            players_df = get_players(spreadsheet)
             if not players_df.empty:
                 selected_player = st.selectbox("Select Player:", players_df['name'].tolist())
                 
@@ -371,7 +488,7 @@ if page == "Weekly Predictions":
                 
                 # Display games and collect predictions
                 predictions = {}
-                predictions_df = conn.read(worksheet="predictions")
+                predictions_df = get_worksheet_data(spreadsheet, 'predictions')
                 
                 for idx, game in week_games.iterrows():
                     game_key = f"game_{game['id']}"
@@ -386,6 +503,8 @@ if page == "Weekly Predictions":
                         existing_prediction = None
                         
                         if not predictions_df.empty:
+                            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
+                            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
                             existing_mask = (predictions_df['player_id'] == player_id) & (predictions_df['game_id'] == game['id'])
                             if existing_mask.any():
                                 existing_prediction = predictions_df.loc[existing_mask, 'predicted_winner'].iloc[0]
@@ -409,7 +528,7 @@ if page == "Weekly Predictions":
                     # Save all predictions
                     success = True
                     for game_id, predicted_winner in predictions.items():
-                        if not add_prediction(conn, player_id, game_id, predicted_winner):
+                        if not add_prediction(spreadsheet, player_id, game_id, predicted_winner):
                             success = False
                     
                     if success:
@@ -427,10 +546,10 @@ if page == "Weekly Predictions":
 elif page == "Game Results":
     st.header("Enter Game Results")
     
-    games_df = get_games(conn, season_year=current_season)
+    games_df = get_games(spreadsheet, season_year=current_season)
     if not games_df.empty:
         # Filter games that don't have results yet
-        pending_games = games_df[games_df['actual_winner'].isna()]
+        pending_games = games_df[(games_df['actual_winner'].isna()) | (games_df['actual_winner'] == '')]
         
         if not pending_games.empty:
             st.subheader("Games Pending Results")
@@ -448,7 +567,7 @@ elif page == "Game Results":
                     
                     with col2:
                         if st.button("Save Result", key=f"save_{game['id']}"):
-                            if update_game_result(conn, game['id'], winner):
+                            if update_game_result(spreadsheet, game['id'], winner):
                                 st.success("Result saved!")
                                 st.rerun()
                             else:
@@ -457,7 +576,7 @@ elif page == "Game Results":
             st.info("All games have results entered!")
         
         # Show completed games
-        completed_games = games_df[games_df['actual_winner'].notna()]
+        completed_games = games_df[(games_df['actual_winner'].notna()) & (games_df['actual_winner'] != '')]
         if not completed_games.empty:
             st.subheader("Completed Games")
             st.dataframe(
@@ -470,15 +589,15 @@ elif page == "Game Results":
 elif page == "Weekly Standings":
     st.header("Weekly Standings")
     
-    games_df = get_games(conn, season_year=current_season)
+    games_df = get_games(spreadsheet, season_year=current_season)
     if not games_df.empty:
         # Get weeks that have completed games
-        completed_games = games_df[games_df['actual_winner'].notna()]
+        completed_games = games_df[(games_df['actual_winner'].notna()) & (games_df['actual_winner'] != '')]
         if not completed_games.empty:
             available_weeks = sorted(completed_games['week_number'].unique())
             selected_week = st.selectbox("Select Week:", available_weeks, key="weekly_standings_week")
             
-            standings_df = get_weekly_standings(conn, current_season, selected_week)
+            standings_df = get_weekly_standings(spreadsheet, current_season, selected_week)
             
             if not standings_df.empty:
                 st.subheader(f"Week {selected_week} Standings")
@@ -513,7 +632,7 @@ elif page == "Weekly Standings":
 elif page == "Season Standings":
     st.header("Season Standings")
     
-    standings_df = get_season_standings(conn, current_season)
+    standings_df = get_season_standings(spreadsheet, current_season)
     
     if not standings_df.empty:
         st.subheader(f"Season {current_season} Overall Standings")
@@ -560,11 +679,11 @@ elif page == "Season Standings":
 elif page == "Player History":
     st.header("Player History")
     
-    players_df = get_players(conn)
+    players_df = get_players(spreadsheet)
     if not players_df.empty:
         selected_player = st.selectbox("Select Player:", players_df['name'].tolist(), key="player_history")
         
-        history_df = get_player_history(conn, selected_player, current_season)
+        history_df = get_player_history(spreadsheet, selected_player, current_season)
         
         if not history_df.empty:
             st.subheader(f"{selected_player}'s Season {current_season} History")
@@ -627,7 +746,7 @@ elif page == "Manage Players & Games":
             new_player_name = st.text_input("Player Name:")
             if st.button("Add Player"):
                 if new_player_name.strip():
-                    if add_player(conn, new_player_name.strip()):
+                    if add_player(spreadsheet, new_player_name.strip()):
                         st.success(f"Player '{new_player_name}' added successfully!")
                         st.rerun()
                     else:
@@ -636,7 +755,7 @@ elif page == "Manage Players & Games":
                     st.error("Please enter a valid name.")
         
         # Show existing players
-        players_df = get_players(conn)
+        players_df = get_players(spreadsheet)
         if not players_df.empty:
             st.subheader("Current Players")
             st.dataframe(players_df[['name', 'created_at']], use_container_width=True, hide_index=True)
@@ -660,7 +779,7 @@ elif page == "Manage Players & Games":
             
             if st.button("Add Game"):
                 if team1.strip() and team2.strip():
-                    if add_game(conn, week_number, game_date, team1.strip(), team2.strip(), current_season):
+                    if add_game(spreadsheet, week_number, game_date, team1.strip(), team2.strip(), current_season):
                         st.success("Game added successfully!")
                         st.rerun()
                     else:
@@ -669,12 +788,12 @@ elif page == "Manage Players & Games":
                     st.error("Please enter both team names.")
         
         # Show existing games
-        games_df = get_games(conn, season_year=current_season)
+        games_df = get_games(spreadsheet, season_year=current_season)
         if not games_df.empty:
             st.subheader(f"Games for Season {current_season}")
             display_games = games_df[['week_number', 'game_date', 'team1', 'team2', 'actual_winner']].copy()
             display_games['status'] = display_games['actual_winner'].apply(
-                lambda x: 'Completed' if pd.notna(x) else 'Pending'
+                lambda x: 'Completed' if pd.notna(x) and x != '' else 'Pending'
             )
             st.dataframe(display_games, use_container_width=True, hide_index=True)
         else:
