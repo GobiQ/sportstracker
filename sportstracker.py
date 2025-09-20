@@ -3,10 +3,13 @@ import pandas as pd
 from datetime import datetime, date
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import gspread
 from google.oauth2.service_account import Credentials
 import json
 import time
+import numpy as np
+from scipy import stats
 
 # Streamlit App Configuration
 st.set_page_config(
@@ -468,6 +471,125 @@ def get_player_history(data, player_name, season_year):
         st.error(f"Error getting player history: {e}")
         return pd.DataFrame()
 
+def calculate_improvement_trends(data, season_year, min_weeks=3):
+    """Calculate improvement trends for all players"""
+    try:
+        players_df = data['players'].copy()
+        weeks_df = data['weeks'].copy()
+        results_df = data['results'].copy()
+        
+        if players_df.empty or weeks_df.empty or results_df.empty:
+            return pd.DataFrame()
+        
+        # Convert data types
+        weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+        weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+        weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+        weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
+        
+        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+        results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
+        
+        # Filter for season
+        season_weeks = weeks_df[weeks_df['season_year'] == season_year]
+        if season_weeks.empty:
+            return pd.DataFrame()
+        
+        trends = []
+        
+        for _, player in players_df.iterrows():
+            player_id = int(player['id'])
+            player_name = player['name']
+            
+            # Get player's participated results for the season
+            player_results = results_df[
+                (results_df['player_id'] == player_id) & 
+                (results_df['week_id'].isin(season_weeks['id'])) &
+                (results_df['status'] == 'participated')
+            ]
+            
+            if len(player_results) < min_weeks:
+                continue
+            
+            # Merge with weeks to get week numbers and calculate accuracy
+            player_weeks = player_results.merge(
+                season_weeks[['id', 'week_number', 'total_games']], 
+                left_on='week_id', 
+                right_on='id'
+            ).sort_values('week_number')
+            
+            # Calculate accuracy for each week
+            player_weeks['accuracy'] = (player_weeks['correct_guesses'] / player_weeks['total_games']) * 100
+            
+            if len(player_weeks) < min_weeks:
+                continue
+            
+            # Calculate trend statistics
+            weeks = player_weeks['week_number'].values
+            accuracies = player_weeks['accuracy'].values
+            
+            # Linear regression to find trend
+            slope, intercept, r_value, p_value, std_err = stats.linregress(weeks, accuracies)
+            
+            # Calculate performance metrics
+            early_avg = player_weeks.head(min_weeks)['accuracy'].mean()
+            recent_avg = player_weeks.tail(min_weeks)['accuracy'].mean()
+            overall_avg = player_weeks['accuracy'].mean()
+            
+            # Calculate volatility (standard deviation)
+            volatility = player_weeks['accuracy'].std()
+            
+            # Determine trend category
+            if abs(slope) < 0.5:
+                trend_category = "Stable"
+            elif slope > 0.5:
+                trend_category = "Improving"
+            else:
+                trend_category = "Declining"
+            
+            trends.append({
+                'player_name': player_name,
+                'weeks_played': len(player_weeks),
+                'overall_accuracy': round(overall_avg, 1),
+                'early_avg': round(early_avg, 1),
+                'recent_avg': round(recent_avg, 1),
+                'improvement': round(recent_avg - early_avg, 1),
+                'trend_slope': round(slope, 2),
+                'trend_r_squared': round(r_value**2, 3),
+                'volatility': round(volatility, 1),
+                'trend_category': trend_category,
+                'trend_significance': 'Significant' if p_value < 0.05 else 'Not Significant'
+            })
+        
+        return pd.DataFrame(trends)
+        
+    except Exception as e:
+        st.error(f"Error calculating improvement trends: {e}")
+        return pd.DataFrame()
+
+def get_rolling_averages(data, player_name, season_year, window=3):
+    """Calculate rolling averages for a player"""
+    try:
+        history = get_player_history(data, player_name, season_year)
+        if history.empty:
+            return pd.DataFrame()
+        
+        # Filter participated weeks only
+        participated = history[history['status'] == 'participated'].copy()
+        if len(participated) < window:
+            return pd.DataFrame()
+        
+        # Calculate rolling averages
+        participated['rolling_avg'] = participated['accuracy'].rolling(window=window, min_periods=1).mean()
+        participated['rolling_std'] = participated['accuracy'].rolling(window=window, min_periods=1).std()
+        
+        return participated
+        
+    except Exception as e:
+        st.error(f"Error calculating rolling averages: {e}")
+        return pd.DataFrame()
+
 # Initialize connection
 spreadsheet = init_connection()
 
@@ -502,6 +624,7 @@ page = st.sidebar.selectbox("Choose a page:", [
     "Weekly Standings", 
     "Season Standings",
     "Player History",
+    "Improvement Trends",  # New page added
     "Edit Players",
     "Edit Results", 
     "Manage Players & Weeks"
@@ -1077,6 +1200,382 @@ elif page == "Player History":
     else:
         st.info("No players found. Please add players first.")
 
+elif page == "Improvement Trends":
+    st.header("📈 Improvement Trends & Performance Analysis")
+    
+    # Calculate improvement trends
+    trends_df = calculate_improvement_trends(data, current_season, min_weeks=3)
+    
+    if not trends_df.empty:
+        st.subheader(f"Season {current_season} Performance Trends")
+        
+        # Overview metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        improving_players = len(trends_df[trends_df['trend_category'] == 'Improving'])
+        stable_players = len(trends_df[trends_df['trend_category'] == 'Stable'])
+        declining_players = len(trends_df[trends_df['trend_category'] == 'Declining'])
+        avg_improvement = trends_df['improvement'].mean()
+        
+        with col1:
+            st.metric("📈 Improving Players", improving_players)
+        with col2:
+            st.metric("📊 Stable Players", stable_players)
+        with col3:
+            st.metric("📉 Declining Players", declining_players)
+        with col4:
+            st.metric("🎯 Avg Improvement", f"{avg_improvement:+.1f}%")
+        
+        # Trends summary table
+        st.subheader("Player Trends Summary")
+        
+        # Sort by improvement
+        trends_display = trends_df.sort_values('improvement', ascending=False).copy()
+        
+        # Add trend indicators
+        trends_display['trend_indicator'] = trends_display['trend_category'].map({
+            'Improving': '📈',
+            'Stable': '📊', 
+            'Declining': '📉'
+        })
+        
+        # Format for display
+        display_cols = [
+            'trend_indicator', 'player_name', 'weeks_played', 'overall_accuracy',
+            'early_avg', 'recent_avg', 'improvement', 'volatility', 'trend_significance'
+        ]
+        trends_display_formatted = trends_display[display_cols].copy()
+        trends_display_formatted.columns = [
+            '📊', 'Player', 'Weeks', 'Overall %', 'Early %', 'Recent %', 'Change', 'Volatility', 'Significance'
+        ]
+        
+        st.dataframe(trends_display_formatted, use_container_width=True, hide_index=True)
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Improvement scatter plot
+            fig1 = px.scatter(
+                trends_df,
+                x='early_avg',
+                y='recent_avg',
+                size='weeks_played',
+                color='trend_category',
+                hover_name='player_name',
+                title='Early vs Recent Performance',
+                color_discrete_map={
+                    'Improving': '#2ecc71',
+                    'Stable': '#f39c12', 
+                    'Declining': '#e74c3c'
+                }
+            )
+            
+            # Add diagonal line (no change)
+            fig1.add_shape(
+                type="line",
+                x0=0, y0=0, x1=100, y1=100,
+                line=dict(color="gray", width=2, dash="dash")
+            )
+            
+            fig1.update_layout(
+                xaxis_title="Early Season Average (%)",
+                yaxis_title="Recent Performance Average (%)"
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        with col2:
+            # Trend slope distribution
+            fig2 = px.histogram(
+                trends_df,
+                x='trend_slope',
+                color='trend_category',
+                title='Distribution of Trend Slopes',
+                color_discrete_map={
+                    'Improving': '#2ecc71',
+                    'Stable': '#f39c12',
+                    'Declining': '#e74c3c'
+                }
+            )
+            fig2.update_layout(xaxis_title="Trend Slope (% per week)")
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # Individual player trend analysis
+        st.subheader("Individual Player Trend Analysis")
+        
+        # Player selector for detailed view
+        selected_trend_player = st.selectbox(
+            "Select Player for Detailed Analysis:",
+            trends_df['player_name'].tolist(),
+            key="trend_player_selector"
+        )
+        
+        if selected_trend_player:
+            # Get rolling averages
+            rolling_data = get_rolling_averages(data, selected_trend_player, current_season, window=3)
+            
+            if not rolling_data.empty:
+                # Player trend details
+                player_trend = trends_df[trends_df['player_name'] == selected_trend_player].iloc[0]
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(
+                        "Trend Category", 
+                        player_trend['trend_category'],
+                        delta=f"{player_trend['improvement']:+.1f}% change"
+                    )
+                with col2:
+                    st.metric(
+                        "Trend Slope", 
+                        f"{player_trend['trend_slope']:+.2f}%/week",
+                        delta=f"R² = {player_trend['trend_r_squared']:.3f}"
+                    )
+                with col3:
+                    st.metric(
+                        "Performance Volatility",
+                        f"{player_trend['volatility']:.1f}%",
+                        delta=player_trend['trend_significance']
+                    )
+                
+                # Detailed performance chart with rolling averages
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    subplot_titles=(
+                        f"{selected_trend_player}'s Weekly Performance with Trend",
+                        "3-Week Rolling Average"
+                    ),
+                    vertical_spacing=0.12,
+                    row_heights=[0.7, 0.3]
+                )
+                
+                # Main performance chart
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolling_data['week_number'],
+                        y=rolling_data['accuracy'],
+                        mode='lines+markers',
+                        name='Weekly Accuracy',
+                        line=dict(color='lightblue', width=2),
+                        marker=dict(size=8)
+                    ),
+                    row=1, col=1
+                )
+                
+                # Trend line
+                x_trend = rolling_data['week_number']
+                y_trend = player_trend['trend_slope'] * x_trend + (player_trend['overall_accuracy'] - player_trend['trend_slope'] * x_trend.mean())
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_trend,
+                        y=y_trend,
+                        mode='lines',
+                        name='Trend Line',
+                        line=dict(color='red', width=3, dash='dash')
+                    ),
+                    row=1, col=1
+                )
+                
+                # Rolling average
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolling_data['week_number'],
+                        y=rolling_data['rolling_avg'],
+                        mode='lines',
+                        name='3-Week Rolling Avg',
+                        line=dict(color='orange', width=3),
+                        fill='tonexty',
+                        fillcolor='rgba(255,165,0,0.1)'
+                    ),
+                    row=2, col=1
+                )
+                
+                # Confidence bands for rolling average
+                upper_band = rolling_data['rolling_avg'] + rolling_data['rolling_std']
+                lower_band = rolling_data['rolling_avg'] - rolling_data['rolling_std']
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolling_data['week_number'],
+                        y=upper_band,
+                        mode='lines',
+                        line=dict(width=0),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ),
+                    row=2, col=1
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolling_data['week_number'],
+                        y=lower_band,
+                        mode='lines',
+                        line=dict(width=0),
+                        fill='tonexty',
+                        fillcolor='rgba(255,165,0,0.2)',
+                        name='±1 Std Dev',
+                        hoverinfo='skip'
+                    ),
+                    row=2, col=1
+                )
+                
+                fig.update_layout(
+                    height=600,
+                    title_text=f"{selected_trend_player} - Performance Trend Analysis",
+                    showlegend=True
+                )
+                
+                fig.update_xaxes(title_text="Week Number", row=2, col=1)
+                fig.update_yaxes(title_text="Accuracy (%)", row=1, col=1)
+                fig.update_yaxes(title_text="Accuracy (%)", row=2, col=1)
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Performance insights
+                st.subheader("Performance Insights")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**🎯 Key Statistics:**")
+                    st.write(f"• Best Week: {rolling_data['accuracy'].max():.1f}% (Week {rolling_data.loc[rolling_data['accuracy'].idxmax(), 'week_number']})")
+                    st.write(f"• Worst Week: {rolling_data['accuracy'].min():.1f}% (Week {rolling_data.loc[rolling_data['accuracy'].idxmin(), 'week_number']})")
+                    st.write(f"• Performance Range: {rolling_data['accuracy'].max() - rolling_data['accuracy'].min():.1f}%")
+                    st.write(f"• Consistency Score: {100 - player_trend['volatility']:.1f}/100")
+                
+                with col2:
+                    st.write("**📈 Trend Analysis:**")
+                    
+                    if player_trend['trend_category'] == 'Improving':
+                        st.write("🟢 **Positive Trend:** Performance is improving over time")
+                        st.write(f"• Gaining {player_trend['trend_slope']:.2f}% per week on average")
+                    elif player_trend['trend_category'] == 'Declining':
+                        st.write("🔴 **Negative Trend:** Performance is declining over time")
+                        st.write(f"• Losing {abs(player_trend['trend_slope']):.2f}% per week on average")
+                    else:
+                        st.write("🟡 **Stable Performance:** Consistent performance level")
+                        st.write(f"• Minimal change ({player_trend['trend_slope']:+.2f}% per week)")
+                    
+                    if player_trend['trend_significance'] == 'Significant':
+                        st.write("• Trend is statistically significant")
+                    else:
+                        st.write("• Trend may be due to random variation")
+        
+        # League-wide trend analysis
+        st.subheader("League-Wide Trend Patterns")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Volatility vs Performance
+            fig_vol = px.scatter(
+                trends_df,
+                x='overall_accuracy',
+                y='volatility',
+                size='weeks_played',
+                color='trend_category',
+                hover_name='player_name',
+                title='Performance vs Consistency',
+                color_discrete_map={
+                    'Improving': '#2ecc71',
+                    'Stable': '#f39c12',
+                    'Declining': '#e74c3c'
+                }
+            )
+            fig_vol.update_layout(
+                xaxis_title="Overall Accuracy (%)",
+                yaxis_title="Performance Volatility (%)"
+            )
+            st.plotly_chart(fig_vol, use_container_width=True)
+        
+        with col2:
+            # Improvement distribution
+            fig_imp = px.box(
+                trends_df,
+                x='trend_category',
+                y='improvement',
+                color='trend_category',
+                title='Improvement Distribution by Category',
+                color_discrete_map={
+                    'Improving': '#2ecc71',
+                    'Stable': '#f39c12',
+                    'Declining': '#e74c3c'
+                }
+            )
+            fig_imp.update_layout(
+                xaxis_title="Trend Category",
+                yaxis_title="Performance Change (%)"
+            )
+            st.plotly_chart(fig_imp, use_container_width=True)
+        
+        # Multi-player comparison
+        st.subheader("Multi-Player Performance Comparison")
+        
+        # Allow selection of multiple players for comparison
+        comparison_players = st.multiselect(
+            "Select players to compare:",
+            trends_df['player_name'].tolist(),
+            default=trends_df.head(3)['player_name'].tolist(),
+            key="multi_player_comparison"
+        )
+        
+        if comparison_players:
+            # Create comparison chart
+            fig_comp = go.Figure()
+            
+            colors = px.colors.qualitative.Set1
+            
+            for i, player in enumerate(comparison_players):
+                player_history = get_player_history(data, player, current_season)
+                participated = player_history[player_history['status'] == 'participated']
+                
+                if not participated.empty:
+                    fig_comp.add_trace(
+                        go.Scatter(
+                            x=participated['week_number'],
+                            y=participated['accuracy'],
+                            mode='lines+markers',
+                            name=player,
+                            line=dict(color=colors[i % len(colors)], width=3),
+                            marker=dict(size=6)
+                        )
+                    )
+            
+            fig_comp.update_layout(
+                title="Multi-Player Performance Comparison",
+                xaxis_title="Week Number",
+                yaxis_title="Accuracy (%)",
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig_comp, use_container_width=True)
+            
+            # Comparison statistics table
+            comparison_stats = []
+            for player in comparison_players:
+                player_trend = trends_df[trends_df['player_name'] == player]
+                if not player_trend.empty:
+                    stats = player_trend.iloc[0]
+                    comparison_stats.append({
+                        'Player': player,
+                        'Overall %': f"{stats['overall_accuracy']:.1f}%",
+                        'Trend': f"{stats['trend_slope']:+.2f}%/week",
+                        'Change': f"{stats['improvement']:+.1f}%",
+                        'Category': stats['trend_category'],
+                        'Volatility': f"{stats['volatility']:.1f}%"
+                    })
+            
+            if comparison_stats:
+                st.write("**Comparison Summary:**")
+                comparison_df = pd.DataFrame(comparison_stats)
+                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+    
+    else:
+        st.info(f"Not enough data for trend analysis. Need at least 3 weeks of participation per player.")
+        st.write("Add more weekly results to see improvement trends and performance analysis.")
+
 elif page == "Edit Players":
     st.header("Edit Players")
     
@@ -1301,15 +1800,8 @@ elif page == "Edit Results":
                                                     st.warning("Click Delete again to confirm!")
                                                     st.rerun()
                                                 else:
-                                                    if delete_result(spreadsheet, result_id):
-                                                        st.success("Result deleted!")
-                                                        if confirm_key in st.session_state:
-                                                            del st.session_state[confirm_key]
-                                                        st.cache_data.clear()
-                                                        time.sleep(1)
-                                                        st.rerun()
-                                                    else:
-                                                        st.error("Error deleting result.")
+                                                    # Note: delete_result function needs to be implemented
+                                                    st.error("Delete result function not implemented yet.")
                                             
                                             # Cancel delete option
                                             if confirm_key in st.session_state:
