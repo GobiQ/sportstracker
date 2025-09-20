@@ -1698,12 +1698,13 @@ elif page == "Weekly Standings":
                         adj_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
                         st.dataframe(adj_display, use_container_width=True, hide_index=True)
                     
-                    # Visualization
+                    # Visualization - sort by absolute accuracy for better performance display
+                    sorted_df = standings_df.sort_values('accuracy_absolute', ascending=False)
                     fig = px.bar(
-                        standings_df, 
+                        sorted_df, 
                         x='player_name', 
                         y=['accuracy_absolute', 'accuracy_adjusted'],
-                        title=f'Week {selected_week} - Accuracy Comparison',
+                        title=f'Week {selected_week} - Accuracy Comparison (sorted by absolute performance)',
                         barmode='group',
                         color_discrete_map={'accuracy_absolute': '#ff7f7f', 'accuracy_adjusted': '#7fbf7f'}
                     )
@@ -1755,11 +1756,13 @@ elif page == "Season Standings":
         col1, col2 = st.columns(2)
         
         with col1:
+            # Sort by absolute accuracy for better performance display
+            sorted_abs_df = standings_df.sort_values('accuracy_absolute', ascending=False)
             fig1 = px.bar(
-                standings_df, 
+                sorted_abs_df, 
                 x='player_name', 
                 y='accuracy_absolute',
-                title='Season Absolute Accuracy',
+                title='Season Absolute Accuracy (sorted by performance)',
                 color='accuracy_absolute',
                 color_continuous_scale='Blues'
             )
@@ -1767,11 +1770,13 @@ elif page == "Season Standings":
             st.plotly_chart(fig1, use_container_width=True)
         
         with col2:
+            # Sort by adjusted accuracy for better performance display
+            sorted_adj_df = standings_df.sort_values('accuracy_adjusted', ascending=False)
             fig2 = px.bar(
-                standings_df, 
+                sorted_adj_df, 
                 x='player_name', 
                 y='accuracy_adjusted',
-                title='Season Adjusted Accuracy',
+                title='Season Adjusted Accuracy (sorted by performance)',
                 color='accuracy_adjusted',
                 color_continuous_scale='Greens'
             )
