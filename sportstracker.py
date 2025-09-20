@@ -516,8 +516,14 @@ def normalize_data_types(data):
     
     data = data.copy()
     
+    # Normalize ID columns as strings (UUID4 hex)
+    id_cols = ['id', 'player_id', 'week_id']
+    for col in id_cols:
+        if col in data.columns:
+            data[col] = data[col].astype(str)
+    
     # Normalize numeric columns
-    numeric_cols = ['id', 'player_id', 'week_id', 'week_number', 'season_year', 'total_games', 'correct_guesses']
+    numeric_cols = ['week_number', 'season_year', 'total_games', 'correct_guesses']
     for col in numeric_cols:
         if col in data.columns:
             data[col] = pd.to_numeric(data[col], errors='coerce')
@@ -884,14 +890,8 @@ def update_result(spreadsheet, result_id, correct_guesses, status):
         return False
 
 def get_next_id(df):
-    """Get the next available ID for a dataframe"""
-    if df.empty or 'id' not in df.columns:
-        return 1
-    try:
-        max_id = int(df['id'].astype(int).max())
-        return max_id + 1 if pd.notna(max_id) else 1
-    except:
-        return 1
+    """Get the next available ID for a dataframe - now returns UUID4 hex string"""
+    return generate_id()
 
 def calculate_standings(data, season_year, week_number=None):
     """Calculate standings with both absolute and adjusted statistics"""
@@ -907,13 +907,13 @@ def calculate_standings(data, season_year, week_number=None):
         if not weeks_df.empty:
             weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
             weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+            weeks_df['id'] = weeks_df['id'].astype(str)
             weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         if not results_df.empty:
             # Keep player_id as string since it's a UUID4 hex
             results_df['player_id'] = results_df['player_id'].astype(str)
-            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+            results_df['week_id'] = results_df['week_id'].astype(str)
             results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
         # Filter weeks
@@ -948,7 +948,7 @@ def calculate_standings(data, season_year, week_number=None):
             
             # Calculate totals
             for _, week in weeks_df.iterrows():
-                week_id = int(week['id'])
+                week_id = str(week['id'])
                 week_result = player_results[player_results['week_id'] == week_id]
                 
                 if not week_result.empty:
@@ -1016,13 +1016,13 @@ def get_player_history(data, player_name, season_year):
         if not weeks_df.empty:
             weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
             weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+            weeks_df['id'] = weeks_df['id'].astype(str)
             weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         if not results_df.empty:
             # Keep player_id as string since it's a UUID4 hex
             results_df['player_id'] = results_df['player_id'].astype(str)
-            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+            results_df['week_id'] = results_df['week_id'].astype(str)
             results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
         # Get player ID
@@ -1081,11 +1081,11 @@ def calculate_improvement_trends(data, season_year, min_weeks=3):
         # Convert data types
         weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
         weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-        weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+        weeks_df['id'] = weeks_df['id'].astype(str)
         weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
-        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
-        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+        results_df['player_id'] = results_df['player_id'].astype(str)
+        results_df['week_id'] = results_df['week_id'].astype(str)
         results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
         # Filter for season
@@ -1248,7 +1248,7 @@ if page == "Enter Results":
         # Convert data types
         weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
         weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-        weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+        weeks_df['id'] = weeks_df['id'].astype(str)
         weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         # Filter for current season
@@ -1260,7 +1260,7 @@ if page == "Enter Results":
             for _, week in season_weeks.iterrows():
                 week_options.append({
                     'label': f"Week {int(week['week_number'])} ({int(week['total_games'])} games) - {week['week_date']}",
-                    'value': int(week['id']),
+                    'value': str(week['id']),
                     'week_number': int(week['week_number']),
                     'total_games': int(week['total_games'])
                 })
@@ -1287,7 +1287,7 @@ if page == "Enter Results":
                     if not results_df.empty:
                         # Keep player_id as string since it's a UUID4 hex
                         results_df['player_id'] = results_df['player_id'].astype(str)
-                        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                        results_df['week_id'] = results_df['week_id'].astype(str)
                         results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
                     
                     # Choose input method
@@ -1304,7 +1304,7 @@ if page == "Enter Results":
                         st.write("Enter results for each player:")
                         
                         for _, player in players_df.iterrows():
-                            player_id = int(player['id'])
+                            player_id = str(player['id'])
                             
                             with st.container():
                                 col1, col2, col3 = st.columns([2, 2, 1])
@@ -1366,8 +1366,8 @@ if page == "Enter Results":
                             results_df_for_updates = data['results'].copy()
                             
                             if not results_df_for_updates.empty:
-                                results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
-                                results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
+                                results_df_for_updates['player_id'] = results_df_for_updates['player_id'].astype(str)
+                                results_df_for_updates['week_id'] = results_df_for_updates['week_id'].astype(str)
                             
                             for player_id, (correct_guesses, status) in results_to_save.items():
                                 result_data = {
@@ -1415,7 +1415,7 @@ Sarah Wilson: 9""")
                         existing_results_text = ""
                         if not results_df.empty:
                             for _, player in players_df.iterrows():
-                                player_id = int(player['id'])
+                                player_id = str(player['id'])
                                 existing_mask = (
                                     (results_df['player_id'] == player_id) & 
                                     (results_df['week_id'] == selected_week_id)
@@ -1441,7 +1441,7 @@ Sarah Wilson: 9""")
                             parse_errors = []
                             
                             # Create name to ID mapping
-                            name_to_id = {player['name']: int(player['id']) for _, player in players_df.iterrows()}
+                            name_to_id = {player['name']: str(player['id']) for _, player in players_df.iterrows()}
                             
                             for line_num, line in enumerate(bulk_results_text.strip().split('\n'), 1):
                                 line = line.strip()
@@ -1503,7 +1503,7 @@ Sarah Wilson: 9""")
                                     if not results_df_for_updates.empty:
                                         # Keep player_id as string since it's a UUID4 hex
                                         results_df_for_updates['player_id'] = results_df_for_updates['player_id'].astype(str)
-                                        results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
+                                        results_df_for_updates['week_id'] = results_df_for_updates['week_id'].astype(str)
                                     
                                     next_id = get_next_id(data['results'])
                                     
@@ -1572,10 +1572,10 @@ elif page == "Weekly Standings":
             weeks_with_results = []
             
             if not results_df.empty:
-                results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                results_df['week_id'] = results_df['week_id'].astype(str)
                 
                 for _, week in season_weeks.iterrows():
-                    week_id = int(week['id'])
+                    week_id = str(week['id'])
                     week_results = results_df[results_df['week_id'] == week_id]
                     if not week_results.empty:
                         weeks_with_results.append(int(week['week_number']))
@@ -2193,10 +2193,10 @@ elif page == "Edit Results":
             weeks_with_results = []
             
             if not results_df.empty:
-                results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                results_df['week_id'] = results_df['week_id'].astype(str)
                 
                 for _, week in season_weeks.iterrows():
-                    week_id = int(week['id'])
+                    week_id = str(week['id'])
                     week_results = results_df[results_df['week_id'] == week_id]
                     if not week_results.empty:
                         weeks_with_results.append({
@@ -2245,7 +2245,7 @@ elif page == "Edit Results":
                             st.write("Click on a result to edit or delete it:")
                             
                             for _, result in week_results_with_names.iterrows():
-                                result_id = int(result['id_result'])
+                                result_id = str(result['id_result'])
                                 player_name = result['name']
                                 current_status = result['status']
                                 current_correct = int(result['correct_guesses']) if pd.notna(result['correct_guesses']) else 0
@@ -2560,12 +2560,12 @@ elif page == "Manage Players & Weeks":
                 
                 # Create editable interface for weeks
                 for _, week in season_weeks.iterrows():
-                    week_id = int(week['id'])
+                    week_id = str(week['id'])
                     
                     # Count results for this week
                     week_results_count = 0
                     if not results_df.empty:
-                        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                        results_df['week_id'] = results_df['week_id'].astype(str)
                         week_results_count = len(results_df[results_df['week_id'] == week_id])
                     
                     with st.expander(f"Week {int(week['week_number'])} - {week['week_date']} ({week_results_count} results)", expanded=False):
