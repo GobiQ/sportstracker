@@ -220,14 +220,21 @@ def get_player_history(player_name, season_year):
     return df
 
 # Initialize database
-init_db()
+if not st.session_state.db_initialized:
+    init_db()
+    st.session_state.db_initialized = True
 
-# Streamlit App
+# Streamlit App Configuration
 st.set_page_config(
     page_title="Sports Prediction Tracker",
     page_icon="🏆",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
+
+# Initialize session state for better performance on Streamlit Cloud
+if 'db_initialized' not in st.session_state:
+    st.session_state.db_initialized = False
 
 st.title("🏆 Youth Home Sports Prediction Tracker")
 st.markdown("Track weekly sports predictions and maintain season-long leaderboards")
