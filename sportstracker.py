@@ -1701,28 +1701,37 @@ elif page == "Edit Players":
                     delete_key = f"delete_{unique_suffix}"
                     confirm_key = f"confirm_delete_{player_id}"
                     
-                    if st.button("Delete", key=delete_key, type="secondary"):
-                        # Confirm deletion
-                        if confirm_key not in st.session_state:
+                    # Check if we're in confirmation mode
+                    in_confirmation = st.session_state.get(confirm_key, False)
+                    
+                    if not in_confirmation:
+                        if st.button("Delete", key=delete_key, type="secondary"):
                             st.session_state[confirm_key] = True
-                            st.warning("⚠️ Click Delete again to confirm. This will delete the player and ALL their results!")
                             st.rerun()
-                        else:
-                            if delete_player(spreadsheet, player_id):
-                                st.success("Player and all their results deleted successfully!")
+                    else:
+                        col3a, col3b = st.columns(2)
+                        with col3a:
+                            if st.button("Confirm", key=f"confirm_{unique_suffix}", type="secondary"):
+                                if delete_player(spreadsheet, player_id):
+                                    st.success("Player and all their results deleted successfully!")
+                                    # Clean up session state
+                                    if confirm_key in st.session_state:
+                                        del st.session_state[confirm_key]
+                                    st.cache_data.clear()
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Error deleting player.")
+                                    if confirm_key in st.session_state:
+                                        del st.session_state[confirm_key]
+                        
+                        with col3b:
+                            if st.button("Cancel", key=f"cancel_{unique_suffix}", type="secondary"):
                                 if confirm_key in st.session_state:
                                     del st.session_state[confirm_key]
-                                st.cache_data.clear()
-                                time.sleep(1)
                                 st.rerun()
-                            else:
-                                st.error("Error deleting player.")
-                
-                # Clear confirmation if user clicks away
-                if confirm_key in st.session_state:
-                    if st.button("Cancel Delete", key=f"cancel_{unique_suffix}"):
-                        del st.session_state[confirm_key]
-                        st.rerun()
+                        
+                        st.warning("⚠️ Are you sure? This will delete the player and ALL their results!")
                 
                 # Show player statistics
                 results_df = data['results'].copy()
@@ -1868,27 +1877,36 @@ elif page == "Edit Results":
                                             delete_key = f"delete_result_{unique_suffix}"
                                             confirm_key = f"confirm_delete_result_{result_id}"
                                             
-                                            if st.button("Delete", key=delete_key, type="secondary"):
-                                                if confirm_key not in st.session_state:
+                                            # Check if we're in confirmation mode
+                                            in_confirmation = st.session_state.get(confirm_key, False)
+                                            
+                                            if not in_confirmation:
+                                                if st.button("Delete", key=delete_key, type="secondary"):
                                                     st.session_state[confirm_key] = True
-                                                    st.warning("Click Delete again to confirm!")
                                                     st.rerun()
-                                                else:
-                                                    if delete_result(spreadsheet, result_id):
-                                                        st.success("Result deleted!")
+                                            else:
+                                                col4b1, col4b2 = st.columns(2)
+                                                with col4b1:
+                                                    if st.button("Confirm", key=f"confirm_del_{unique_suffix}", type="secondary"):
+                                                        if delete_result(spreadsheet, result_id):
+                                                            st.success("Result deleted!")
+                                                            if confirm_key in st.session_state:
+                                                                del st.session_state[confirm_key]
+                                                            st.cache_data.clear()
+                                                            time.sleep(1)
+                                                            st.rerun()
+                                                        else:
+                                                            st.error("Error deleting result.")
+                                                            if confirm_key in st.session_state:
+                                                                del st.session_state[confirm_key]
+                                                
+                                                with col4b2:
+                                                    if st.button("Cancel", key=f"cancel_del_{unique_suffix}", type="secondary"):
                                                         if confirm_key in st.session_state:
                                                             del st.session_state[confirm_key]
-                                                        st.cache_data.clear()
-                                                        time.sleep(1)
                                                         st.rerun()
-                                                    else:
-                                                        st.error("Error deleting result.")
-                                            
-                                            # Cancel delete option
-                                            if confirm_key in st.session_state:
-                                                if st.button("Cancel", key=f"cancel_delete_{unique_suffix}"):
-                                                    del st.session_state[confirm_key]
-                                                    st.rerun()
+                                                
+                                                st.warning("⚠️ Confirm deletion?")
                         else:
                             st.info("No results found for this week.")
                     else:
@@ -2067,4 +2085,4 @@ elif page == "Manage Players & Weeks":
 
 # Footer
 st.markdown("---")
-st.markdown("Built by Jonny and his AI pal")
+st.markdown("Built with ❤️ using Streamlit & Google Sheets | Youth Home Sports Prediction Tracker")
