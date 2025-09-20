@@ -72,36 +72,43 @@ def ensure_sheets_exist(spreadsheet):
         existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
         st.write(f"📋 Existing sheets: {existing_sheets}")
         
+        # Create a case-insensitive mapping of existing sheets
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        st.write(f"🔍 Case-insensitive mapping: {existing_sheets_lower}")
+        
         for sheet_name, headers in required_sheets.items():
-            if sheet_name not in existing_sheets:
-                # Create the sheet
-                st.write(f"➕ Creating sheet: {sheet_name}")
-                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
-                worksheet.append_row(headers)
-                st.write(f"✅ Created sheet: {sheet_name}")
-            else:
-                # Sheet exists, check if it has headers
-                st.write(f"📝 Sheet '{sheet_name}' already exists, checking headers...")
-                worksheet = spreadsheet.worksheet(sheet_name)
+            if sheet_name.lower() in existing_sheets_lower:
+                # Sheet exists (possibly with different case), use the actual name
+                actual_sheet_name = existing_sheets_lower[sheet_name.lower()]
+                st.write(f"📝 Found existing sheet: '{actual_sheet_name}' (looking for '{sheet_name}')")
+                
+                worksheet = spreadsheet.worksheet(actual_sheet_name)
                 
                 try:
                     existing_headers = worksheet.row_values(1)
                     if not existing_headers or existing_headers != headers:
-                        st.write(f"🔧 Adding/updating headers for {sheet_name}")
+                        st.write(f"🔧 Adding/updating headers for {actual_sheet_name}")
                         # Clear first row and add correct headers
-                        worksheet.delete_rows(1, 1)
+                        if existing_headers:
+                            worksheet.delete_rows(1, 1)
                         worksheet.insert_row(headers, 1)
-                        st.write(f"✅ Updated headers for {sheet_name}")
+                        st.write(f"✅ Updated headers for {actual_sheet_name}")
                     else:
-                        st.write(f"✅ Headers already correct for {sheet_name}")
+                        st.write(f"✅ Headers already correct for {actual_sheet_name}")
                 except Exception as header_error:
-                    st.write(f"⚠️ Could not check headers for {sheet_name}: {header_error}")
+                    st.write(f"⚠️ Could not check headers for {actual_sheet_name}: {header_error}")
                     # Try to add headers anyway
                     try:
                         worksheet.insert_row(headers, 1)
-                        st.write(f"✅ Added headers to {sheet_name}")
+                        st.write(f"✅ Added headers to {actual_sheet_name}")
                     except:
-                        st.write(f"⚠️ Could not add headers to {sheet_name}")
+                        st.write(f"⚠️ Could not add headers to {actual_sheet_name}")
+            else:
+                # Sheet doesn't exist, create it
+                st.write(f"➕ Creating sheet: {sheet_name}")
+                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
+                worksheet.append_row(headers)
+                st.write(f"✅ Created sheet: {sheet_name}")
         
         st.write("🎉 All sheets are ready!")
         return True
@@ -116,16 +123,29 @@ def ensure_sheets_exist(spreadsheet):
 def get_worksheet_data(spreadsheet, sheet_name):
     """Get data from a specific worksheet"""
     try:
-        worksheet = spreadsheet.worksheet(sheet_name)
+        # Try to find the sheet with case-insensitive matching
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        
+        actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
         data = worksheet.get_all_records()
         return pd.DataFrame(data)
-    except:
+    except Exception as e:
+        st.error(f"Error getting data from {sheet_name}: {e}")
         return pd.DataFrame()
 
 def append_to_worksheet(spreadsheet, sheet_name, data_dict):
     """Append a row to a worksheet"""
     try:
-        worksheet = spreadsheet.worksheet(sheet_name)
+        # Try to find the sheet with case-insensitive matching
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        
+        actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
         
         # Get headers to ensure correct order
         headers = worksheet.row_values(1)
@@ -142,12 +162,18 @@ def append_to_worksheet(spreadsheet, sheet_name, data_dict):
 def update_worksheet_row(spreadsheet, sheet_name, row_id, updates):
     """Update a specific row in a worksheet"""
     try:
-        worksheet = spreadsheet.worksheet(sheet_name)
+        # Try to find the sheet with case-insensitive matching
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        
+        actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
         data = worksheet.get_all_records()
         
         # Find the row to update
         for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
-            if row['id'] == row_id:
+            if str(row.get('id', '')) == str(row_id):
                 # Update specific cells
                 for column, value in updates.items():
                     # Find column index
