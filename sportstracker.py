@@ -187,15 +187,123 @@ def batch_update_sheet(spreadsheet, sheet_name, data_list, operation='append'):
         st.error(f"Error batch updating {sheet_name}: {e}")
         return False
 
-def get_next_id(df):
-    """Get the next available ID for a dataframe"""
-    if df.empty or 'id' not in df.columns:
-        return 1
+def update_player_name(spreadsheet, player_id, new_name):
+    """Update a player's name"""
     try:
-        max_id = int(df['id'].astype(int).max())
-        return max_id + 1 if pd.notna(max_id) else 1
-    except:
-        return 1
+        # Find actual sheet name (case-insensitive)
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        actual_sheet_name = existing_sheets_lower.get('players', 'players')
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
+            if str(row.get('id', '')) == str(player_id):
+                # Update name cell
+                headers = worksheet.row_values(1)
+                if 'name' in headers:
+                    col_index = headers.index('name') + 1
+                    worksheet.update_cell(i, col_index, new_name)
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating player: {e}")
+        return False
+
+def delete_player(spreadsheet, player_id):
+    """Delete a player and all their results"""
+    try:
+        # Delete from players sheet
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        
+        # Delete from players sheet
+        players_sheet_name = existing_sheets_lower.get('players', 'players')
+        worksheet = spreadsheet.worksheet(players_sheet_name)
+        data = worksheet.get_all_records()
+        
+        row_to_delete = None
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(player_id):
+                row_to_delete = i
+                break
+        
+        if row_to_delete:
+            worksheet.delete_rows(row_to_delete)
+        
+        # Delete from results sheet
+        results_sheet_name = existing_sheets_lower.get('results', 'results')
+        results_worksheet = spreadsheet.worksheet(results_sheet_name)
+        results_data = results_worksheet.get_all_records()
+        
+        # Find all rows to delete (in reverse order to avoid index issues)
+        rows_to_delete = []
+        for i, row in enumerate(results_data, start=2):
+            if str(row.get('player_id', '')) == str(player_id):
+                rows_to_delete.append(i)
+        
+        # Delete rows in reverse order
+        for row_num in reversed(rows_to_delete):
+            results_worksheet.delete_rows(row_num)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error deleting player: {e}")
+        return False
+
+def update_result(spreadsheet, result_id, correct_guesses, status):
+    """Update a specific result"""
+    try:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        actual_sheet_name = existing_sheets_lower.get('results', 'results')
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(result_id):
+                headers = worksheet.row_values(1)
+                
+                # Update correct_guesses
+                if 'correct_guesses' in headers:
+                    col_index = headers.index('correct_guesses') + 1
+                    value = correct_guesses if status != 'omitted' else ''
+                    worksheet.update_cell(i, col_index, value)
+                
+                # Update status
+                if 'status' in headers:
+                    col_index = headers.index('status') + 1
+                    worksheet.update_cell(i, col_index, status)
+                
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating result: {e}")
+        return False
+
+def delete_result(spreadsheet, result_id):
+    """Delete a specific result"""
+    try:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        actual_sheet_name = existing_sheets_lower.get('results', 'results')
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to delete
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(result_id):
+                worksheet.delete_rows(i)
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error deleting result: {e}")
+        return False
 
 def calculate_standings(data, season_year, week_number=None):
     """Calculate standings with both absolute and adjusted statistics"""
