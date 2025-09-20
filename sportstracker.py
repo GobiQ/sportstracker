@@ -34,23 +34,64 @@ def init_connection():
             "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"]
         }
         
+        # Add universe_domain if it exists in secrets
+        if "universe_domain" in st.secrets["connections"]["gsheets"]:
+            credentials_info["universe_domain"] = st.secrets["connections"]["gsheets"]["universe_domain"]
+        
+        st.write("🔍 Debug Info:")
+        st.write(f"Project ID: {credentials_info['project_id']}")
+        st.write(f"Client Email: {credentials_info['client_email']}")
+        spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        st.write(f"Spreadsheet ID: {spreadsheet_id}")
+        
         # Create credentials
         credentials = Credentials.from_service_account_info(
             credentials_info,
-            scopes=['https://spreadsheets.google.com/feeds',
-                   'https://www.googleapis.com/auth/drive']
+            scopes=[
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
         )
+        
+        st.write("✅ Credentials created successfully")
         
         # Create gspread client
         gc = gspread.authorize(credentials)
+        st.write("✅ Gspread client authorized")
         
-        # Open spreadsheet
-        spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
-        spreadsheet = gc.open_by_key(spreadsheet_id)
-        
-        return spreadsheet
+        # Test authentication by listing spreadsheets
+        try:
+            # Try to access the specific spreadsheet
+            spreadsheet = gc.open_by_key(spreadsheet_id)
+            st.write(f"✅ Successfully opened spreadsheet: {spreadsheet.title}")
+            return spreadsheet
+        except Exception as open_error:
+            st.error(f"❌ Error opening spreadsheet: {open_error}")
+            st.write("🔍 Trying to list accessible spreadsheets...")
+            
+            try:
+                # List accessible spreadsheets for debugging
+                files = gc.list_permissions(spreadsheet_id)
+                st.write(f"📋 Spreadsheet permissions: {files}")
+            except Exception as perm_error:
+                st.error(f"❌ Cannot access permissions: {perm_error}")
+            
+            # Try opening by URL instead
+            try:
+                spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+                spreadsheet = gc.open_by_url(spreadsheet_url)
+                st.write(f"✅ Successfully opened via URL: {spreadsheet.title}")
+                return spreadsheet
+            except Exception as url_error:
+                st.error(f"❌ Error opening via URL: {url_error}")
+            
+            return None
+            
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+        st.error(f"❌ Error in connection setup: {e}")
+        st.write(f"🔍 Error type: {type(e).__name__}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 def ensure_sheets_exist(spreadsheet):
