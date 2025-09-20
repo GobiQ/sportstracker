@@ -1999,10 +1999,11 @@ elif page == "Improvement Trends":
         # Individual player trend analysis
         st.subheader("Individual Player Trend Analysis")
         
-        # Player selector for detailed view
+        # Player selector for detailed view (sorted by most improved)
+        sorted_trends = trends_df.sort_values('improvement', ascending=False)
         selected_trend_player = st.selectbox(
             "Select Player for Detailed Analysis:",
-            trends_df['player_name'].tolist(),
+            sorted_trends['player_name'].tolist(),
             key="trend_player_selector"
         )
         
