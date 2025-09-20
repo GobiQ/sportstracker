@@ -38,12 +38,6 @@ def init_connection():
         if "universe_domain" in st.secrets["connections"]["gsheets"]:
             credentials_info["universe_domain"] = st.secrets["connections"]["gsheets"]["universe_domain"]
         
-        st.write("🔍 Debug Info:")
-        st.write(f"Project ID: {credentials_info['project_id']}")
-        st.write(f"Client Email: {credentials_info['client_email']}")
-        spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
-        st.write(f"Spreadsheet ID: {spreadsheet_id}")
-        
         # Create credentials
         credentials = Credentials.from_service_account_info(
             credentials_info,
@@ -53,69 +47,70 @@ def init_connection():
             ]
         )
         
-        st.write("✅ Credentials created successfully")
-        
         # Create gspread client
         gc = gspread.authorize(credentials)
-        st.write("✅ Gspread client authorized")
         
-        # Test authentication by listing spreadsheets
-        try:
-            # Try to access the specific spreadsheet
-            spreadsheet = gc.open_by_key(spreadsheet_id)
-            st.write(f"✅ Successfully opened spreadsheet: {spreadsheet.title}")
-            return spreadsheet
-        except Exception as open_error:
-            st.error(f"❌ Error opening spreadsheet: {open_error}")
-            st.write("🔍 Trying to list accessible spreadsheets...")
-            
-            try:
-                # List accessible spreadsheets for debugging
-                files = gc.list_permissions(spreadsheet_id)
-                st.write(f"📋 Spreadsheet permissions: {files}")
-            except Exception as perm_error:
-                st.error(f"❌ Cannot access permissions: {perm_error}")
-            
-            # Try opening by URL instead
-            try:
-                spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-                spreadsheet = gc.open_by_url(spreadsheet_url)
-                st.write(f"✅ Successfully opened via URL: {spreadsheet.title}")
-                return spreadsheet
-            except Exception as url_error:
-                st.error(f"❌ Error opening via URL: {url_error}")
-            
-            return None
+        # Open spreadsheet
+        spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        spreadsheet = gc.open_by_key(spreadsheet_id)
+        
+        return spreadsheet
             
     except Exception as e:
-        st.error(f"❌ Error in connection setup: {e}")
-        st.write(f"🔍 Error type: {type(e).__name__}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
 def ensure_sheets_exist(spreadsheet):
     """Ensure all required sheets exist in the Google Sheet"""
     try:
-        required_sheets = ['players', 'games', 'predictions']
-        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        required_sheets = {
+            'players': ['id', 'name', 'created_at'],
+            'games': ['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'],
+            'predictions': ['id', 'player_id', 'game_id', 'predicted_winner', 'is_correct', 'created_at']
+        }
         
-        for sheet_name in required_sheets:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        st.write(f"📋 Existing sheets: {existing_sheets}")
+        
+        for sheet_name, headers in required_sheets.items():
             if sheet_name not in existing_sheets:
                 # Create the sheet
-                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=10)
+                st.write(f"➕ Creating sheet: {sheet_name}")
+                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
+                worksheet.append_row(headers)
+                st.write(f"✅ Created sheet: {sheet_name}")
+            else:
+                # Sheet exists, check if it has headers
+                st.write(f"📝 Sheet '{sheet_name}' already exists, checking headers...")
+                worksheet = spreadsheet.worksheet(sheet_name)
                 
-                # Add headers based on sheet type
-                if sheet_name == 'players':
-                    worksheet.append_row(['id', 'name', 'created_at'])
-                elif sheet_name == 'games':
-                    worksheet.append_row(['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'])
-                elif sheet_name == 'predictions':
-                    worksheet.append_row(['id', 'player_id', 'game_id', 'predicted_winner', 'is_correct', 'created_at'])
+                try:
+                    existing_headers = worksheet.row_values(1)
+                    if not existing_headers or existing_headers != headers:
+                        st.write(f"🔧 Adding/updating headers for {sheet_name}")
+                        # Clear first row and add correct headers
+                        worksheet.delete_rows(1, 1)
+                        worksheet.insert_row(headers, 1)
+                        st.write(f"✅ Updated headers for {sheet_name}")
+                    else:
+                        st.write(f"✅ Headers already correct for {sheet_name}")
+                except Exception as header_error:
+                    st.write(f"⚠️ Could not check headers for {sheet_name}: {header_error}")
+                    # Try to add headers anyway
+                    try:
+                        worksheet.insert_row(headers, 1)
+                        st.write(f"✅ Added headers to {sheet_name}")
+                    except:
+                        st.write(f"⚠️ Could not add headers to {sheet_name}")
         
+        st.write("🎉 All sheets are ready!")
         return True
+        
     except Exception as e:
         st.error(f"Error setting up sheets: {e}")
+        st.write(f"🔍 Error type: {type(e).__name__}")
+        import traceback
+        st.code(traceback.format_exc())
         return False
 
 def get_worksheet_data(spreadsheet, sheet_name):
