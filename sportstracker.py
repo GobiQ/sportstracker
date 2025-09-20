@@ -65,59 +65,44 @@ def ensure_sheets_exist(spreadsheet):
     try:
         required_sheets = {
             'players': ['id', 'name', 'created_at'],
-            'games': ['id', 'week_number', 'game_date', 'team1', 'team2', 'actual_winner', 'season_year', 'created_at'],
-            'predictions': ['id', 'player_id', 'game_id', 'predicted_winner', 'is_correct', 'created_at']
+            'weeks': ['id', 'week_number', 'season_year', 'total_games', 'week_date', 'created_at'],
+            'results': ['id', 'player_id', 'week_id', 'correct_guesses', 'status', 'created_at']
         }
         
         existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
-        st.write(f"📋 Existing sheets: {existing_sheets}")
         
         # Create a case-insensitive mapping of existing sheets
         existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
-        st.write(f"🔍 Case-insensitive mapping: {existing_sheets_lower}")
         
         for sheet_name, headers in required_sheets.items():
             if sheet_name.lower() in existing_sheets_lower:
                 # Sheet exists (possibly with different case), use the actual name
                 actual_sheet_name = existing_sheets_lower[sheet_name.lower()]
-                st.write(f"📝 Found existing sheet: '{actual_sheet_name}' (looking for '{sheet_name}')")
                 
                 worksheet = spreadsheet.worksheet(actual_sheet_name)
                 
                 try:
                     existing_headers = worksheet.row_values(1)
                     if not existing_headers or existing_headers != headers:
-                        st.write(f"🔧 Adding/updating headers for {actual_sheet_name}")
                         # Clear first row and add correct headers
                         if existing_headers:
                             worksheet.delete_rows(1, 1)
                         worksheet.insert_row(headers, 1)
-                        st.write(f"✅ Updated headers for {actual_sheet_name}")
-                    else:
-                        st.write(f"✅ Headers already correct for {actual_sheet_name}")
                 except Exception as header_error:
-                    st.write(f"⚠️ Could not check headers for {actual_sheet_name}: {header_error}")
                     # Try to add headers anyway
                     try:
                         worksheet.insert_row(headers, 1)
-                        st.write(f"✅ Added headers to {actual_sheet_name}")
                     except:
-                        st.write(f"⚠️ Could not add headers to {actual_sheet_name}")
+                        pass
             else:
                 # Sheet doesn't exist, create it
-                st.write(f"➕ Creating sheet: {sheet_name}")
                 worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
                 worksheet.append_row(headers)
-                st.write(f"✅ Created sheet: {sheet_name}")
         
-        st.write("🎉 All sheets are ready!")
         return True
         
     except Exception as e:
         st.error(f"Error setting up sheets: {e}")
-        st.write(f"🔍 Error type: {type(e).__name__}")
-        import traceback
-        st.code(traceback.format_exc())
         return False
 
 def get_worksheet_data(spreadsheet, sheet_name):
@@ -133,7 +118,6 @@ def get_worksheet_data(spreadsheet, sheet_name):
         data = worksheet.get_all_records()
         return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Error getting data from {sheet_name}: {e}")
         return pd.DataFrame()
 
 def append_to_worksheet(spreadsheet, sheet_name, data_dict):
@@ -223,239 +207,217 @@ def get_players(spreadsheet):
     """Get all players from the players sheet"""
     return get_worksheet_data(spreadsheet, 'players')
 
-def add_game(spreadsheet, week_number, game_date, team1, team2, season_year):
-    """Add a new game to the games sheet"""
+def add_week(spreadsheet, week_number, season_year, total_games, week_date):
+    """Add a new week to the weeks sheet"""
     try:
-        games_df = get_worksheet_data(spreadsheet, 'games')
+        weeks_df = get_worksheet_data(spreadsheet, 'weeks')
         
-        new_id = get_next_id(games_df)
-        game_data = {
+        # Check if week already exists for this season
+        if not weeks_df.empty:
+            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+            existing = weeks_df[
+                (weeks_df['season_year'] == season_year) & 
+                (weeks_df['week_number'] == week_number)
+            ]
+            if not existing.empty:
+                return False
+        
+        new_id = get_next_id(weeks_df)
+        week_data = {
             'id': new_id,
             'week_number': week_number,
-            'game_date': game_date.strftime('%Y-%m-%d'),
-            'team1': team1,
-            'team2': team2,
-            'actual_winner': '',
             'season_year': season_year,
+            'total_games': total_games,
+            'week_date': week_date.strftime('%Y-%m-%d'),
             'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
-        return append_to_worksheet(spreadsheet, 'games', game_data)
+        return append_to_worksheet(spreadsheet, 'weeks', week_data)
     except Exception as e:
-        st.error(f"Error adding game: {e}")
+        st.error(f"Error adding week: {e}")
         return False
 
-def get_games(spreadsheet, season_year=None, week_number=None):
-    """Get games from the games sheet with optional filters"""
+def get_weeks(spreadsheet, season_year=None):
+    """Get weeks from the weeks sheet with optional filters"""
     try:
-        games_df = get_worksheet_data(spreadsheet, 'games')
+        weeks_df = get_worksheet_data(spreadsheet, 'weeks')
         
-        if games_df.empty:
+        if weeks_df.empty:
             return pd.DataFrame()
         
         # Convert data types
-        if 'season_year' in games_df.columns:
-            games_df['season_year'] = pd.to_numeric(games_df['season_year'], errors='coerce')
-        if 'week_number' in games_df.columns:
-            games_df['week_number'] = pd.to_numeric(games_df['week_number'], errors='coerce')
-        if 'id' in games_df.columns:
-            games_df['id'] = pd.to_numeric(games_df['id'], errors='coerce')
+        if 'season_year' in weeks_df.columns:
+            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+        if 'week_number' in weeks_df.columns:
+            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+        if 'id' in weeks_df.columns:
+            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+        if 'total_games' in weeks_df.columns:
+            weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         # Apply filters
         if season_year is not None:
-            games_df = games_df[games_df['season_year'] == season_year]
-        if week_number is not None:
-            games_df = games_df[games_df['week_number'] == week_number]
+            weeks_df = weeks_df[weeks_df['season_year'] == season_year]
         
-        return games_df.sort_values(['week_number', 'game_date'])
+        return weeks_df.sort_values(['season_year', 'week_number'])
     except Exception as e:
-        st.error(f"Error getting games: {e}")
+        st.error(f"Error getting weeks: {e}")
         return pd.DataFrame()
 
-def update_game_result(spreadsheet, game_id, actual_winner):
-    """Update the actual winner of a game and recalculate predictions"""
+def add_or_update_result(spreadsheet, player_id, week_id, correct_guesses, status):
+    """Add or update a player's result for a week"""
     try:
-        # Update games sheet
-        success = update_worksheet_row(spreadsheet, 'games', game_id, {'actual_winner': actual_winner})
+        results_df = get_worksheet_data(spreadsheet, 'results')
         
-        if success:
-            # Update predictions correctness
-            predictions_df = get_worksheet_data(spreadsheet, 'predictions')
-            if not predictions_df.empty:
-                # Convert game_id to proper type for comparison
-                predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
-                game_predictions = predictions_df[predictions_df['game_id'] == game_id]
-                
-                for _, prediction in game_predictions.iterrows():
-                    is_correct = prediction['predicted_winner'] == actual_winner
-                    update_worksheet_row(spreadsheet, 'predictions', prediction['id'], {'is_correct': is_correct})
-        
-        return success
-    except Exception as e:
-        st.error(f"Error updating game result: {e}")
-        return False
-
-def add_prediction(spreadsheet, player_id, game_id, predicted_winner):
-    """Add or update a player's prediction for a game"""
-    try:
-        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
-        
-        # Check if prediction already exists
-        if not predictions_df.empty:
-            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
-            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
+        # Check if result already exists
+        if not results_df.empty:
+            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
             
-            existing_mask = (predictions_df['player_id'] == player_id) & (predictions_df['game_id'] == game_id)
+            existing_mask = (results_df['player_id'] == player_id) & (results_df['week_id'] == week_id)
             if existing_mask.any():
-                # Update existing prediction
-                existing_prediction = predictions_df[existing_mask].iloc[0]
-                return update_worksheet_row(spreadsheet, 'predictions', existing_prediction['id'], 
-                                          {'predicted_winner': predicted_winner, 'is_correct': ''})
+                # Update existing result
+                existing_result = results_df[existing_mask].iloc[0]
+                updates = {
+                    'correct_guesses': correct_guesses if status != 'omitted' else '',
+                    'status': status
+                }
+                return update_worksheet_row(spreadsheet, 'results', existing_result['id'], updates)
         
-        # Add new prediction
-        new_id = get_next_id(predictions_df)
-        prediction_data = {
+        # Add new result
+        new_id = get_next_id(results_df)
+        result_data = {
             'id': new_id,
             'player_id': player_id,
-            'game_id': game_id,
-            'predicted_winner': predicted_winner,
-            'is_correct': '',
+            'week_id': week_id,
+            'correct_guesses': correct_guesses if status != 'omitted' else '',
+            'status': status,
             'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
-        return append_to_worksheet(spreadsheet, 'predictions', prediction_data)
+        return append_to_worksheet(spreadsheet, 'results', result_data)
     except Exception as e:
-        st.error(f"Error adding prediction: {e}")
+        st.error(f"Error adding result: {e}")
         return False
 
-def get_weekly_standings(spreadsheet, season_year, week_number):
-    """Get weekly standings for a specific week"""
+def get_results(spreadsheet):
+    """Get all results from the results sheet"""
     try:
-        players_df = get_players(spreadsheet)
-        games_df = get_games(spreadsheet, season_year=season_year, week_number=week_number)
-        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
+        results_df = get_worksheet_data(spreadsheet, 'results')
         
-        if players_df.empty or games_df.empty:
-            return pd.DataFrame()
+        if not results_df.empty:
+            # Convert data types
+            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+            results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
-        # Filter games with results
-        games_with_results = games_df[games_df['actual_winner'].notna() & (games_df['actual_winner'] != '')]
-        
-        if games_with_results.empty:
-            return pd.DataFrame()
-        
-        # Convert data types
-        if not predictions_df.empty:
-            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
-            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
-            predictions_df['is_correct'] = predictions_df['is_correct'].astype(str).map({'True': True, 'False': False})
-        
-        # Calculate standings
-        standings = []
-        for _, player in players_df.iterrows():
-            if not predictions_df.empty:
-                player_predictions = predictions_df[
-                    (predictions_df['player_id'] == player['id']) & 
-                    (predictions_df['game_id'].isin(games_with_results['id']))
-                ]
-                
-                total_predictions = len(player_predictions)
-                if total_predictions > 0:
-                    correct_predictions = player_predictions['is_correct'].sum()
-                    incorrect_predictions = total_predictions - correct_predictions
-                    accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
-                else:
-                    correct_predictions = 0
-                    incorrect_predictions = 0
-                    accuracy_percentage = 0
-            else:
-                total_predictions = 0
-                correct_predictions = 0
-                incorrect_predictions = 0
-                accuracy_percentage = 0
-            
-            standings.append({
-                'player_name': player['name'],
-                'total_predictions': total_predictions,
-                'correct_predictions': correct_predictions,
-                'incorrect_predictions': incorrect_predictions,
-                'accuracy_percentage': round(accuracy_percentage, 1)
-            })
-        
-        standings_df = pd.DataFrame(standings)
-        return standings_df.sort_values(['correct_predictions', 'accuracy_percentage'], ascending=False)
-    except Exception as e:
-        st.error(f"Error getting weekly standings: {e}")
+        return results_df
+    except:
         return pd.DataFrame()
 
-def get_season_standings(spreadsheet, season_year):
-    """Get season standings"""
+def calculate_standings(spreadsheet, season_year, week_number=None):
+    """Calculate standings with both absolute and adjusted statistics"""
     try:
         players_df = get_players(spreadsheet)
-        games_df = get_games(spreadsheet, season_year=season_year)
-        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
+        weeks_df = get_weeks(spreadsheet, season_year=season_year)
+        results_df = get_results(spreadsheet)
         
-        if players_df.empty or games_df.empty:
+        if players_df.empty or weeks_df.empty:
             return pd.DataFrame()
         
-        # Filter games with results
-        games_with_results = games_df[games_df['actual_winner'].notna() & (games_df['actual_winner'] != '')]
+        # Filter weeks
+        if week_number is not None:
+            weeks_df = weeks_df[weeks_df['week_number'] == week_number]
         
-        if games_with_results.empty:
+        if weeks_df.empty:
             return pd.DataFrame()
         
-        # Convert data types
-        if not predictions_df.empty:
-            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
-            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
-            predictions_df['is_correct'] = predictions_df['is_correct'].astype(str).map({'True': True, 'False': False})
+        week_ids = weeks_df['id'].tolist()
         
-        # Calculate standings
+        # Calculate standings for each player
         standings = []
         for _, player in players_df.iterrows():
-            if not predictions_df.empty:
-                player_predictions = predictions_df[
-                    (predictions_df['player_id'] == player['id']) & 
-                    (predictions_df['game_id'].isin(games_with_results['id']))
-                ]
+            player_results = results_df[
+                (results_df['player_id'] == player['id']) & 
+                (results_df['week_id'].isin(week_ids))
+            ]
+            
+            # Absolute statistics (including omissions as zeros)
+            total_weeks_absolute = len(weeks_df)
+            total_correct_absolute = 0
+            total_possible_absolute = 0
+            
+            # Adjusted statistics (excluding omissions)
+            participated_results = player_results[player_results['status'] != 'omitted']
+            total_weeks_adjusted = len(participated_results)
+            total_correct_adjusted = 0
+            total_possible_adjusted = 0
+            
+            # Calculate totals
+            for _, week in weeks_df.iterrows():
+                week_result = player_results[player_results['week_id'] == week['id']]
                 
-                total_predictions = len(player_predictions)
-                if total_predictions > 0:
-                    correct_predictions = player_predictions['is_correct'].sum()
-                    incorrect_predictions = total_predictions - correct_predictions
-                    accuracy_percentage = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+                if not week_result.empty:
+                    result = week_result.iloc[0]
+                    if result['status'] == 'omitted':
+                        # For absolute stats, count as 0 correct out of total_games
+                        total_possible_absolute += week['total_games']
+                        # For adjusted stats, don't count this week
+                    else:
+                        # Count for both absolute and adjusted
+                        correct = result['correct_guesses'] if pd.notna(result['correct_guesses']) else 0
+                        total_correct_absolute += correct
+                        total_possible_absolute += week['total_games']
+                        total_correct_adjusted += correct
+                        total_possible_adjusted += week['total_games']
                 else:
-                    correct_predictions = 0
-                    incorrect_predictions = 0
-                    accuracy_percentage = 0
-            else:
-                total_predictions = 0
-                correct_predictions = 0
-                incorrect_predictions = 0
-                accuracy_percentage = 0
+                    # No result recorded - treat as 0 for absolute, skip for adjusted
+                    total_possible_absolute += week['total_games']
+            
+            # Calculate percentages
+            accuracy_absolute = (total_correct_absolute / total_possible_absolute * 100) if total_possible_absolute > 0 else 0
+            accuracy_adjusted = (total_correct_adjusted / total_possible_adjusted * 100) if total_possible_adjusted > 0 else 0
             
             standings.append({
                 'player_name': player['name'],
-                'total_predictions': total_predictions,
-                'correct_predictions': correct_predictions,
-                'incorrect_predictions': incorrect_predictions,
-                'accuracy_percentage': round(accuracy_percentage, 1)
+                
+                # Absolute statistics
+                'weeks_absolute': total_weeks_absolute,
+                'correct_absolute': total_correct_absolute,
+                'possible_absolute': total_possible_absolute,
+                'accuracy_absolute': round(accuracy_absolute, 1),
+                
+                # Adjusted statistics  
+                'weeks_adjusted': total_weeks_adjusted,
+                'correct_adjusted': total_correct_adjusted,
+                'possible_adjusted': total_possible_adjusted,
+                'accuracy_adjusted': round(accuracy_adjusted, 1),
+                
+                # Status info
+                'omitted_weeks': total_weeks_absolute - total_weeks_adjusted
             })
         
         standings_df = pd.DataFrame(standings)
-        return standings_df.sort_values(['correct_predictions', 'accuracy_percentage'], ascending=False)
+        
+        # Sort by adjusted accuracy (primary), then absolute accuracy
+        if not standings_df.empty:
+            standings_df = standings_df.sort_values(['accuracy_adjusted', 'accuracy_absolute'], ascending=False)
+        
+        return standings_df
+        
     except Exception as e:
-        st.error(f"Error getting season standings: {e}")
+        st.error(f"Error calculating standings: {e}")
         return pd.DataFrame()
 
 def get_player_history(spreadsheet, player_name, season_year):
-    """Get a player's prediction history"""
+    """Get a player's history for a season"""
     try:
         players_df = get_players(spreadsheet)
-        games_df = get_games(spreadsheet, season_year=season_year)
-        predictions_df = get_worksheet_data(spreadsheet, 'predictions')
+        weeks_df = get_weeks(spreadsheet, season_year=season_year)
+        results_df = get_results(spreadsheet)
         
-        if players_df.empty or games_df.empty:
+        if players_df.empty or weeks_df.empty:
             return pd.DataFrame()
         
         # Get player ID
@@ -465,33 +427,35 @@ def get_player_history(spreadsheet, player_name, season_year):
         
         player_id = player_row.iloc[0]['id']
         
-        if predictions_df.empty:
-            return pd.DataFrame()
+        # Get player's results
+        player_results = results_df[results_df['player_id'] == player_id]
         
-        # Convert data types
-        predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
-        predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
-        games_df['id'] = pd.to_numeric(games_df['id'], errors='coerce')
-        
-        # Get player's predictions for the season
-        player_predictions = predictions_df[predictions_df['player_id'] == player_id]
-        
-        # Merge with games data
-        history = player_predictions.merge(games_df, left_on='game_id', right_on='id', suffixes=('_pred', '_game'))
+        # Merge with weeks data
+        history = weeks_df.merge(
+            player_results, 
+            left_on='id', 
+            right_on='week_id', 
+            how='left',
+            suffixes=('_week', '_result')
+        )
         
         if history.empty:
             return pd.DataFrame()
         
-        # Convert is_correct to proper boolean
-        history['is_correct'] = history['is_correct'].astype(str).map({'True': True, 'False': False, '': None})
+        # Calculate accuracy for each week
+        history['accuracy'] = history.apply(
+            lambda row: (row['correct_guesses'] / row['total_games'] * 100) 
+            if pd.notna(row['correct_guesses']) and row['status'] != 'omitted' and row['total_games'] > 0
+            else None, 
+            axis=1
+        )
         
-        # Select and rename columns
-        history = history[[
-            'week_number', 'game_date', 'team1', 'team2', 
-            'predicted_winner', 'actual_winner', 'is_correct'
-        ]].sort_values(['week_number', 'game_date'])
+        # Clean up status
+        history['status'] = history['status'].fillna('no_result')
+        history['correct_guesses'] = history['correct_guesses'].fillna(0)
         
-        return history
+        return history[['week_number', 'week_date', 'total_games', 'correct_guesses', 'accuracy', 'status']].sort_values('week_number')
+        
     except Exception as e:
         st.error(f"Error getting player history: {e}")
         return pd.DataFrame()
@@ -513,228 +477,269 @@ if 'sheets_initialized' not in st.session_state:
             st.stop()
 
 st.title("🏆 Youth Home Sports Prediction Tracker")
-st.markdown("Track weekly sports predictions and maintain season-long leaderboards")
+st.markdown("Track weekly sports prediction results with omission handling")
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
 page = st.sidebar.selectbox("Choose a page:", [
-    "Weekly Predictions", 
-    "Game Results", 
+    "Enter Results", 
     "Weekly Standings", 
     "Season Standings",
     "Player History",
-    "Manage Players & Games"
+    "Manage Players & Weeks"
 ])
 
 # Get current season year
 current_season = st.sidebar.selectbox("Season Year:", [2024, 2025, 2026], index=1)
 
-if page == "Weekly Predictions":
-    st.header("Weekly Predictions")
+if page == "Enter Results":
+    st.header("Enter Weekly Results")
     
     # Get available weeks for current season
-    games_df = get_games(spreadsheet, season_year=current_season)
-    if not games_df.empty:
-        available_weeks = sorted(games_df['week_number'].unique())
-        selected_week = st.selectbox("Select Week:", available_weeks)
+    weeks_df = get_weeks(spreadsheet, season_year=current_season)
+    if not weeks_df.empty:
+        # Show week selector
+        week_options = []
+        for _, week in weeks_df.iterrows():
+            week_options.append({
+                'label': f"Week {week['week_number']} ({week['total_games']} games) - {week['week_date']}",
+                'value': week['id'],
+                'week_number': week['week_number'],
+                'total_games': week['total_games']
+            })
         
-        # Get games for selected week
-        week_games = games_df[games_df['week_number'] == selected_week]
+        selected_week_option = st.selectbox(
+            "Select Week:", 
+            week_options,
+            format_func=lambda x: x['label']
+        )
         
-        if not week_games.empty:
+        if selected_week_option:
+            selected_week_id = selected_week_option['value']
+            selected_week_number = selected_week_option['week_number']
+            total_games = selected_week_option['total_games']
+            
+            st.subheader(f"Week {selected_week_number} Results ({total_games} total games)")
+            
+            # Get players and existing results
             players_df = get_players(spreadsheet)
+            results_df = get_results(spreadsheet)
+            
             if not players_df.empty:
-                selected_player = st.selectbox("Select Player:", players_df['name'].tolist())
+                # Create input form for each player
+                results_to_save = {}
                 
-                st.subheader(f"Week {selected_week} Games - {selected_player}")
+                st.write("Enter results for each player:")
                 
-                # Display games and collect predictions
-                predictions = {}
-                predictions_df = get_worksheet_data(spreadsheet, 'predictions')
-                
-                for idx, game in week_games.iterrows():
-                    game_key = f"game_{game['id']}"
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.write(f"**{game['team1']} vs {game['team2']}** - {game['game_date']}")
-                    
-                    with col2:
-                        # Get existing prediction if any
-                        player_id = players_df[players_df['name'] == selected_player]['id'].iloc[0]
-                        existing_prediction = None
+                for _, player in players_df.iterrows():
+                    with st.container():
+                        col1, col2, col3 = st.columns([2, 2, 1])
                         
-                        if not predictions_df.empty:
-                            predictions_df['player_id'] = pd.to_numeric(predictions_df['player_id'], errors='coerce')
-                            predictions_df['game_id'] = pd.to_numeric(predictions_df['game_id'], errors='coerce')
-                            existing_mask = (predictions_df['player_id'] == player_id) & (predictions_df['game_id'] == game['id'])
+                        with col1:
+                            st.write(f"**{player['name']}**")
+                        
+                        # Get existing result if any
+                        existing_result = None
+                        if not results_df.empty:
+                            existing_mask = (
+                                (results_df['player_id'] == player['id']) & 
+                                (results_df['week_id'] == selected_week_id)
+                            )
                             if existing_mask.any():
-                                existing_prediction = predictions_df.loc[existing_mask, 'predicted_winner'].iloc[0]
+                                existing_result = results_df[existing_mask].iloc[0]
                         
-                        choice_index = 0
-                        if existing_prediction == game['team2']:
-                            choice_index = 1
+                        with col2:
+                            # Status selector
+                            status_options = ['participated', 'omitted']
+                            default_status = 0
+                            if existing_result is not None and existing_result['status'] == 'omitted':
+                                default_status = 1
+                            
+                            status = st.selectbox(
+                                "Status:",
+                                status_options,
+                                key=f"status_{player['id']}",
+                                index=default_status,
+                                label_visibility="collapsed"
+                            )
                         
-                        predicted_winner = st.radio(
-                            f"Pick winner:",
-                            [game['team1'], game['team2']],
-                            key=game_key,
-                            index=choice_index
-                        )
-                        predictions[game['id']] = predicted_winner
+                        with col3:
+                            if status == 'participated':
+                                # Correct guesses input
+                                default_correct = 0
+                                if existing_result is not None and pd.notna(existing_result['correct_guesses']):
+                                    default_correct = int(existing_result['correct_guesses'])
+                                
+                                correct_guesses = st.number_input(
+                                    f"Correct guesses (0-{total_games}):",
+                                    min_value=0,
+                                    max_value=int(total_games),
+                                    value=default_correct,
+                                    key=f"correct_{player['id']}",
+                                    label_visibility="collapsed"
+                                )
+                                results_to_save[player['id']] = (correct_guesses, status)
+                            else:
+                                st.write("—")
+                                results_to_save[player['id']] = (0, status)
+                        
+                        st.divider()
                 
-                if st.button("Save Predictions"):
-                    # Get player ID
-                    player_id = players_df[players_df['name'] == selected_player]['id'].iloc[0]
+                # Save button
+                if st.button("Save All Results", type="primary"):
+                    success_count = 0
+                    total_count = len(results_to_save)
                     
-                    # Save all predictions
-                    success = True
-                    for game_id, predicted_winner in predictions.items():
-                        if not add_prediction(spreadsheet, player_id, game_id, predicted_winner):
-                            success = False
+                    for player_id, (correct_guesses, status) in results_to_save.items():
+                        if add_or_update_result(spreadsheet, player_id, selected_week_id, correct_guesses, status):
+                            success_count += 1
                     
-                    if success:
-                        st.success("Predictions saved successfully!")
+                    if success_count == total_count:
+                        st.success("All results saved successfully!")
                         st.rerun()
                     else:
-                        st.error("Error saving predictions. Please try again.")
+                        st.warning(f"Saved {success_count} out of {total_count} results. Some may have failed.")
             else:
-                st.warning("No players found. Please add players in the 'Manage Players & Games' section.")
-        else:
-            st.info(f"No games scheduled for week {selected_week}")
+                st.warning("No players found. Please add players in the 'Manage Players & Weeks' section.")
     else:
-        st.info("No games found for the current season. Please add games in the 'Manage Players & Games' section.")
-
-elif page == "Game Results":
-    st.header("Enter Game Results")
-    
-    games_df = get_games(spreadsheet, season_year=current_season)
-    if not games_df.empty:
-        # Filter games that don't have results yet
-        pending_games = games_df[(games_df['actual_winner'].isna()) | (games_df['actual_winner'] == '')]
-        
-        if not pending_games.empty:
-            st.subheader("Games Pending Results")
-            
-            for idx, game in pending_games.iterrows():
-                with st.expander(f"Week {game['week_number']}: {game['team1']} vs {game['team2']} ({game['game_date']})"):
-                    col1, col2 = st.columns([2, 1])
-                    
-                    with col1:
-                        winner = st.radio(
-                            "Actual Winner:",
-                            [game['team1'], game['team2']],
-                            key=f"result_{game['id']}"
-                        )
-                    
-                    with col2:
-                        if st.button("Save Result", key=f"save_{game['id']}"):
-                            if update_game_result(spreadsheet, game['id'], winner):
-                                st.success("Result saved!")
-                                st.rerun()
-                            else:
-                                st.error("Error saving result. Please try again.")
-        else:
-            st.info("All games have results entered!")
-        
-        # Show completed games
-        completed_games = games_df[(games_df['actual_winner'].notna()) & (games_df['actual_winner'] != '')]
-        if not completed_games.empty:
-            st.subheader("Completed Games")
-            st.dataframe(
-                completed_games[['week_number', 'game_date', 'team1', 'team2', 'actual_winner']],
-                use_container_width=True
-            )
-    else:
-        st.info("No games found for the current season.")
+        st.info("No weeks found for the current season. Please add weeks in the 'Manage Players & Weeks' section.")
 
 elif page == "Weekly Standings":
     st.header("Weekly Standings")
     
-    games_df = get_games(spreadsheet, season_year=current_season)
-    if not games_df.empty:
-        # Get weeks that have completed games
-        completed_games = games_df[(games_df['actual_winner'].notna()) & (games_df['actual_winner'] != '')]
-        if not completed_games.empty:
-            available_weeks = sorted(completed_games['week_number'].unique())
-            selected_week = st.selectbox("Select Week:", available_weeks, key="weekly_standings_week")
+    weeks_df = get_weeks(spreadsheet, season_year=current_season)
+    if not weeks_df.empty:
+        # Get weeks that have at least some results
+        results_df = get_results(spreadsheet)
+        weeks_with_results = []
+        
+        for _, week in weeks_df.iterrows():
+            week_results = results_df[results_df['week_id'] == week['id']]
+            if not week_results.empty:
+                weeks_with_results.append(week['week_number'])
+        
+        if weeks_with_results:
+            selected_week = st.selectbox("Select Week:", sorted(weeks_with_results))
             
-            standings_df = get_weekly_standings(spreadsheet, current_season, selected_week)
+            standings_df = calculate_standings(spreadsheet, current_season, week_number=selected_week)
             
             if not standings_df.empty:
                 st.subheader(f"Week {selected_week} Standings")
                 
-                # Add rank column
-                standings_df['rank'] = range(1, len(standings_df) + 1)
-                standings_df = standings_df[['rank', 'player_name', 'correct_predictions', 
-                                           'incorrect_predictions', 'total_predictions', 'accuracy_percentage']]
+                # Show both absolute and adjusted statistics
+                col1, col2 = st.columns(2)
                 
-                # Display dataframe
-                st.dataframe(standings_df, use_container_width=True, hide_index=True)
+                with col1:
+                    st.write("**📊 Absolute Statistics** (including omissions as 0)")
+                    abs_display = standings_df.copy()
+                    abs_display['rank'] = range(1, len(abs_display) + 1)
+                    abs_display = abs_display[['rank', 'player_name', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
+                    abs_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
+                    st.dataframe(abs_display, use_container_width=True, hide_index=True)
                 
-                # Create visualization
-                if len(standings_df) > 0:
-                    fig = px.bar(
-                        standings_df.head(10), 
-                        x='player_name', 
-                        y='correct_predictions',
-                        title=f'Week {selected_week} - Correct Predictions',
-                        color='accuracy_percentage',
-                        color_continuous_scale='RdYlGn'
-                    )
-                    fig.update_layout(xaxis_tickangle=-45)
-                    st.plotly_chart(fig, use_container_width=True)
+                with col2:
+                    st.write("**🎯 Adjusted Statistics** (excluding omissions)")
+                    adj_display = standings_df.copy()
+                    adj_display['rank'] = range(1, len(adj_display) + 1)
+                    adj_display = adj_display[['rank', 'player_name', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted']]
+                    adj_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
+                    st.dataframe(adj_display, use_container_width=True, hide_index=True)
+                
+                # Visualization
+                fig = px.bar(
+                    standings_df.head(10), 
+                    x='player_name', 
+                    y=['accuracy_absolute', 'accuracy_adjusted'],
+                    title=f'Week {selected_week} - Accuracy Comparison',
+                    barmode='group',
+                    color_discrete_map={'accuracy_absolute': '#ff7f7f', 'accuracy_adjusted': '#7fbf7f'}
+                )
+                fig.update_layout(xaxis_tickangle=-45)
+                fig.update_traces(name='Absolute', selector=dict(name='accuracy_absolute'))
+                fig.update_traces(name='Adjusted', selector=dict(name='accuracy_adjusted'))
+                st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info(f"No predictions found for week {selected_week}")
+                st.info(f"No results found for week {selected_week}")
         else:
-            st.info("No completed games found for the current season.")
+            st.info("No weeks with results found for the current season.")
     else:
-        st.info("No games found for the current season.")
+        st.info("No weeks found for the current season.")
 
 elif page == "Season Standings":
     st.header("Season Standings")
     
-    standings_df = get_season_standings(spreadsheet, current_season)
+    standings_df = calculate_standings(spreadsheet, current_season)
     
     if not standings_df.empty:
         st.subheader(f"Season {current_season} Overall Standings")
         
-        # Add rank column
-        standings_df['rank'] = range(1, len(standings_df) + 1)
-        standings_df = standings_df[['rank', 'player_name', 'correct_predictions', 
-                                   'incorrect_predictions', 'total_predictions', 'accuracy_percentage']]
+        # Show both statistics side by side
+        col1, col2 = st.columns(2)
         
-        # Display dataframe
-        st.dataframe(standings_df, use_container_width=True, hide_index=True)
+        with col1:
+            st.write("**📊 Absolute Statistics** (including omissions as 0)")
+            abs_display = standings_df.copy()
+            abs_display['rank'] = range(1, len(abs_display) + 1)
+            abs_display = abs_display[['rank', 'player_name', 'weeks_absolute', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
+            abs_display.columns = ['Rank', 'Player', 'Weeks', 'Correct', 'Possible', 'Accuracy %']
+            st.dataframe(abs_display, use_container_width=True, hide_index=True)
         
-        # Create visualizations
-        if len(standings_df) > 0:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig1 = px.bar(
-                    standings_df.head(10), 
-                    x='player_name', 
-                    y='correct_predictions',
-                    title='Total Correct Predictions',
-                    color='correct_predictions',
-                    color_continuous_scale='Blues'
-                )
-                fig1.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig1, use_container_width=True)
-            
-            with col2:
-                fig2 = px.scatter(
-                    standings_df, 
-                    x='total_predictions', 
-                    y='accuracy_percentage',
-                    size='correct_predictions',
-                    hover_name='player_name',
-                    title='Accuracy vs Total Predictions',
-                    color='correct_predictions',
-                    color_continuous_scale='RdYlGn'
-                )
-                st.plotly_chart(fig2, use_container_width=True)
+        with col2:
+            st.write("**🎯 Adjusted Statistics** (excluding omissions)")
+            adj_display = standings_df.copy()
+            adj_display['rank'] = range(1, len(adj_display) + 1)
+            adj_display = adj_display[['rank', 'player_name', 'weeks_adjusted', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted', 'omitted_weeks']]
+            adj_display.columns = ['Rank', 'Player', 'Weeks', 'Correct', 'Possible', 'Accuracy %', 'Omitted']
+            st.dataframe(adj_display, use_container_width=True, hide_index=True)
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig1 = px.bar(
+                standings_df.head(10), 
+                x='player_name', 
+                y='accuracy_absolute',
+                title='Season Absolute Accuracy',
+                color='accuracy_absolute',
+                color_continuous_scale='Blues'
+            )
+            fig1.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        with col2:
+            fig2 = px.bar(
+                standings_df.head(10), 
+                x='player_name', 
+                y='accuracy_adjusted',
+                title='Season Adjusted Accuracy',
+                color='accuracy_adjusted',
+                color_continuous_scale='Greens'
+            )
+            fig2.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # Comparison scatter plot
+        fig3 = px.scatter(
+            standings_df, 
+            x='accuracy_absolute', 
+            y='accuracy_adjusted',
+            size='weeks_adjusted',
+            hover_name='player_name',
+            title='Absolute vs Adjusted Accuracy',
+            color='omitted_weeks',
+            color_continuous_scale='Reds'
+        )
+        fig3.add_shape(
+            type="line",
+            x0=0, y0=0, x1=100, y1=100,
+            line=dict(color="gray", width=2, dash="dash")
+        )
+        fig3.update_layout(
+            xaxis_title="Absolute Accuracy (%)",
+            yaxis_title="Adjusted Accuracy (%)"
+        )
+        st.plotly_chart(fig3, use_container_width=True)
     else:
         st.info("No season data available yet.")
 
@@ -750,55 +755,87 @@ elif page == "Player History":
         if not history_df.empty:
             st.subheader(f"{selected_player}'s Season {current_season} History")
             
-            # Calculate weekly performance
-            weekly_stats = history_df.groupby('week_number').agg({
-                'is_correct': ['sum', 'count']
-            }).reset_index()
-            weekly_stats.columns = ['week_number', 'correct', 'total']
-            weekly_stats['accuracy'] = (weekly_stats['correct'] / weekly_stats['total'] * 100).round(1)
+            # Calculate summary statistics
+            participated_weeks = history_df[history_df['status'] == 'participated']
             
-            # Show weekly performance chart
-            if len(weekly_stats) > 0:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=weekly_stats['week_number'],
-                    y=weekly_stats['accuracy'],
-                    mode='lines+markers',
-                    name='Weekly Accuracy %',
-                    line=dict(color='blue', width=3)
-                ))
-                fig.update_layout(
-                    title=f"{selected_player}'s Weekly Performance",
-                    xaxis_title="Week Number",
-                    yaxis_title="Accuracy (%)",
-                    yaxis=dict(range=[0, 100])
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            if not participated_weeks.empty:
+                total_correct = participated_weeks['correct_guesses'].sum()
+                total_possible = participated_weeks['total_games'].sum()
+                overall_accuracy = (total_correct / total_possible * 100) if total_possible > 0 else 0
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Weeks Participated", len(participated_weeks))
+                with col2:
+                    st.metric("Total Correct", int(total_correct))
+                with col3:
+                    st.metric("Total Possible", int(total_possible))
+                with col4:
+                    st.metric("Overall Accuracy", f"{overall_accuracy:.1f}%")
+                
+                # Weekly performance chart
+                chart_data = participated_weeks[participated_weeks['accuracy'].notna()]
+                if not chart_data.empty:
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=chart_data['week_number'],
+                        y=chart_data['accuracy'],
+                        mode='lines+markers',
+                        name='Weekly Accuracy %',
+                        line=dict(color='blue', width=3),
+                        marker=dict(size=8)
+                    ))
+                    
+                    # Add horizontal line for overall average
+                    fig.add_hline(
+                        y=overall_accuracy, 
+                        line_dash="dash", 
+                        line_color="red",
+                        annotation_text=f"Overall Average: {overall_accuracy:.1f}%"
+                    )
+                    
+                    fig.update_layout(
+                        title=f"{selected_player}'s Weekly Performance",
+                        xaxis_title="Week Number",
+                        yaxis_title="Accuracy (%)",
+                        yaxis=dict(range=[0, 100])
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             
             # Show detailed history
-            st.subheader("Detailed Prediction History")
+            st.subheader("Detailed Weekly History")
             history_display = history_df.copy()
-            history_display['result'] = history_display['is_correct'].map({
-                True: '✅ Correct', 
-                False: '❌ Wrong', 
-                None: '⏳ Pending'
+            
+            # Format the display
+            history_display['status_display'] = history_display['status'].map({
+                'participated': '✅ Participated',
+                'omitted': '⏸️ Omitted',
+                'no_result': '❓ No Result'
             })
             
-            st.dataframe(
-                history_display[['week_number', 'game_date', 'team1', 'team2', 
-                               'predicted_winner', 'actual_winner', 'result']],
-                use_container_width=True,
-                hide_index=True
+            history_display['accuracy_display'] = history_display['accuracy'].apply(
+                lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
             )
+            
+            history_display['correct_display'] = history_display.apply(
+                lambda row: f"{int(row['correct_guesses'])}/{int(row['total_games'])}" 
+                if row['status'] == 'participated' else "—", 
+                axis=1
+            )
+            
+            display_df = history_display[['week_number', 'week_date', 'correct_display', 'accuracy_display', 'status_display']]
+            display_df.columns = ['Week', 'Date', 'Correct/Total', 'Accuracy', 'Status']
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
         else:
-            st.info(f"No prediction history found for {selected_player} in season {current_season}.")
+            st.info(f"No history found for {selected_player} in season {current_season}.")
     else:
         st.info("No players found. Please add players first.")
 
-elif page == "Manage Players & Games":
-    st.header("Manage Players & Games")
+elif page == "Manage Players & Weeks":
+    st.header("Manage Players & Weeks")
     
-    tab1, tab2 = st.tabs(["Players", "Games"])
+    tab1, tab2 = st.tabs(["Players", "Weeks"])
     
     with tab1:
         st.subheader("Manage Players")
@@ -825,41 +862,46 @@ elif page == "Manage Players & Games":
             st.info("No players found.")
     
     with tab2:
-        st.subheader("Manage Games")
+        st.subheader("Manage Weeks")
         
-        # Add new game
-        with st.expander("Add New Game"):
+        # Add new week
+        with st.expander("Add New Week"):
             col1, col2 = st.columns(2)
             
             with col1:
                 week_number = st.number_input("Week Number:", min_value=1, value=1)
-                game_date = st.date_input("Game Date:", value=date.today())
+                total_games = st.number_input("Total Games:", min_value=1, value=10)
             
             with col2:
-                team1 = st.text_input("Team 1:")
-                team2 = st.text_input("Team 2:")
+                week_date = st.date_input("Week Date:", value=date.today())
             
-            if st.button("Add Game"):
-                if team1.strip() and team2.strip():
-                    if add_game(spreadsheet, week_number, game_date, team1.strip(), team2.strip(), current_season):
-                        st.success("Game added successfully!")
-                        st.rerun()
-                    else:
-                        st.error("Error adding game. Please try again.")
+            if st.button("Add Week"):
+                if add_week(spreadsheet, week_number, current_season, total_games, week_date):
+                    st.success("Week added successfully!")
+                    st.rerun()
                 else:
-                    st.error("Please enter both team names.")
+                    st.error("Week already exists for this season or error occurred!")
         
-        # Show existing games
-        games_df = get_games(spreadsheet, season_year=current_season)
-        if not games_df.empty:
-            st.subheader(f"Games for Season {current_season}")
-            display_games = games_df[['week_number', 'game_date', 'team1', 'team2', 'actual_winner']].copy()
-            display_games['status'] = display_games['actual_winner'].apply(
-                lambda x: 'Completed' if pd.notna(x) and x != '' else 'Pending'
+        # Show existing weeks
+        weeks_df = get_weeks(spreadsheet, season_year=current_season)
+        if not weeks_df.empty:
+            st.subheader(f"Weeks for Season {current_season}")
+            
+            # Get results count for each week
+            results_df = get_results(spreadsheet)
+            weeks_display = weeks_df.copy()
+            
+            weeks_display['results_count'] = weeks_display['id'].apply(
+                lambda week_id: len(results_df[results_df['week_id'] == week_id]) if not results_df.empty else 0
             )
-            st.dataframe(display_games, use_container_width=True, hide_index=True)
+            
+            display_cols = ['week_number', 'week_date', 'total_games', 'results_count']
+            weeks_display = weeks_display[display_cols]
+            weeks_display.columns = ['Week #', 'Date', 'Total Games', 'Results Entered']
+            
+            st.dataframe(weeks_display, use_container_width=True, hide_index=True)
         else:
-            st.info(f"No games found for season {current_season}.")
+            st.info(f"No weeks found for season {current_season}.")
 
 # Footer
 st.markdown("---")
