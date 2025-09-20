@@ -134,8 +134,18 @@ def append_to_worksheet(spreadsheet, sheet_name, data_dict):
         # Get headers to ensure correct order
         headers = worksheet.row_values(1)
         
-        # Create row in correct order
-        row = [data_dict.get(header, '') for header in headers]
+        # Create row in correct order, converting data types to native Python types
+        row = []
+        for header in headers:
+            value = data_dict.get(header, '')
+            # Convert numpy/pandas types to native Python types
+            if hasattr(value, 'item'):  # numpy scalar
+                value = value.item()
+            elif hasattr(value, 'tolist'):  # numpy array
+                value = value.tolist()
+            elif str(type(value)).startswith('<class \'pandas'):  # pandas types
+                value = str(value)
+            row.append(value)
         
         worksheet.append_row(row)
         return True
@@ -160,6 +170,14 @@ def update_worksheet_row(spreadsheet, sheet_name, row_id, updates):
             if str(row.get('id', '')) == str(row_id):
                 # Update specific cells
                 for column, value in updates.items():
+                    # Convert data types to native Python types
+                    if hasattr(value, 'item'):  # numpy scalar
+                        value = value.item()
+                    elif hasattr(value, 'tolist'):  # numpy array
+                        value = value.tolist()
+                    elif str(type(value)).startswith('<class \'pandas'):  # pandas types
+                        value = str(value)
+                    
                     # Find column index
                     headers = worksheet.row_values(1)
                     if column in headers:
@@ -176,7 +194,8 @@ def get_next_id(df):
     if df.empty or 'id' not in df.columns:
         return 1
     try:
-        max_id = df['id'].astype(int).max()
+        # Convert to native Python int to avoid serialization issues
+        max_id = int(df['id'].astype(int).max())
         return max_id + 1 if pd.notna(max_id) else 1
     except:
         return 1
