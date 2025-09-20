@@ -2292,4 +2292,4 @@ elif page == "Manage Players & Weeks":
 
 # Footer
 st.markdown("---")
-st.markdown("Built with ❤️ using Streamlit & Google Sheets | Youth Home Sports Prediction Tracker")
+st.markdown("Built for Bradley-san | PickLeague 2026")
