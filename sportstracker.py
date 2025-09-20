@@ -106,6 +106,82 @@ def get_all_data(spreadsheet_id):
         st.error(f"Error loading data: {e}")
         return {'players': pd.DataFrame(), 'weeks': pd.DataFrame(), 'results': pd.DataFrame()}
 
+def update_week(spreadsheet, week_id, week_number, total_games, week_date):
+    """Update a week's data"""
+    try:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        actual_sheet_name = existing_sheets_lower.get('weeks', 'weeks')
+        
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        data = worksheet.get_all_records()
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
+            if str(row.get('id', '')) == str(week_id):
+                headers = worksheet.row_values(1)
+                
+                # Update week_number
+                if 'week_number' in headers:
+                    col_index = headers.index('week_number') + 1
+                    worksheet.update_cell(i, col_index, week_number)
+                
+                # Update total_games
+                if 'total_games' in headers:
+                    col_index = headers.index('total_games') + 1
+                    worksheet.update_cell(i, col_index, total_games)
+                
+                # Update week_date
+                if 'week_date' in headers:
+                    col_index = headers.index('week_date') + 1
+                    worksheet.update_cell(i, col_index, week_date)
+                
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating week: {e}")
+        return False
+
+def delete_week(spreadsheet, week_id):
+    """Delete a week and all its results"""
+    try:
+        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
+        
+        # Delete from weeks sheet
+        weeks_sheet_name = existing_sheets_lower.get('weeks', 'weeks')
+        worksheet = spreadsheet.worksheet(weeks_sheet_name)
+        data = worksheet.get_all_records()
+        
+        row_to_delete = None
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(week_id):
+                row_to_delete = i
+                break
+        
+        if row_to_delete:
+            worksheet.delete_rows(row_to_delete)
+        
+        # Delete from results sheet
+        results_sheet_name = existing_sheets_lower.get('results', 'results')
+        results_worksheet = spreadsheet.worksheet(results_sheet_name)
+        results_data = results_worksheet.get_all_records()
+        
+        # Find all rows to delete (in reverse order to avoid index issues)
+        rows_to_delete = []
+        for i, row in enumerate(results_data, start=2):
+            if str(row.get('week_id', '')) == str(week_id):
+                rows_to_delete.append(i)
+        
+        # Delete rows in reverse order
+        for row_num in reversed(rows_to_delete):
+            results_worksheet.delete_rows(row_num)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error deleting week: {e}")
+        return False
+
 def linear_regression(x, y):
     """Calculate linear regression without scipy dependency"""
     try:
@@ -2049,7 +2125,7 @@ elif page == "Manage Players & Weeks":
                     else:
                         st.error("Error adding week. Please try again.")
         
-        # Show existing weeks
+        # Show existing weeks with edit functionality
         weeks_df = data['weeks'].copy()
         if not weeks_df.empty:
             # Convert data types
@@ -2063,21 +2139,136 @@ elif page == "Manage Players & Weeks":
                 
                 # Get results count for each week
                 results_df = data['results'].copy()
-                weeks_display = season_weeks.copy()
                 
-                if not results_df.empty:
-                    results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
-                    weeks_display['results_count'] = weeks_display['id'].apply(
-                        lambda week_id: len(results_df[results_df['week_id'] == week_id])
-                    )
-                else:
-                    weeks_display['results_count'] = 0
-                
-                display_cols = ['week_number', 'week_date', 'total_games', 'results_count']
-                weeks_display = weeks_display[display_cols]
-                weeks_display.columns = ['Week #', 'Date', 'Total Games', 'Results Entered']
-                
-                st.dataframe(weeks_display, use_container_width=True, hide_index=True)
+                # Create editable interface for weeks
+                for _, week in season_weeks.iterrows():
+                    week_id = int(week['id'])
+                    
+                    # Count results for this week
+                    week_results_count = 0
+                    if not results_df.empty:
+                        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                        week_results_count = len(results_df[results_df['week_id'] == week_id])
+                    
+                    with st.expander(f"Week {int(week['week_number'])} - {week['week_date']} ({week_results_count} results)", expanded=False):
+                        # Create unique keys
+                        unique_suffix = f"{week_id}_{hash(str(week['week_number']))}"
+                        
+                        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+                        
+                        with col1:
+                            new_week_number = st.number_input(
+                                "Week Number:",
+                                min_value=1,
+                                value=int(week['week_number']),
+                                key=f"edit_week_num_{unique_suffix}"
+                            )
+                        
+                        with col2:
+                            new_total_games = st.number_input(
+                                "Total Games:",
+                                min_value=1,
+                                value=int(week['total_games']),
+                                key=f"edit_total_games_{unique_suffix}"
+                            )
+                        
+                        with col3:
+                            # Parse the existing date
+                            try:
+                                if isinstance(week['week_date'], str):
+                                    existing_date = datetime.strptime(week['week_date'], '%Y-%m-%d').date()
+                                else:
+                                    existing_date = date.today()
+                            except:
+                                existing_date = date.today()
+                            
+                            new_week_date = st.date_input(
+                                "Week Date:",
+                                value=existing_date,
+                                key=f"edit_week_date_{unique_suffix}"
+                            )
+                        
+                        with col4:
+                            st.write(f"**Results:** {week_results_count}")
+                        
+                        # Action buttons
+                        col1, col2, col3 = st.columns([1, 1, 1])
+                        
+                        with col1:
+                            if st.button("Update Week", key=f"update_week_{unique_suffix}", type="secondary"):
+                                # Check if week number already exists (only if changed)
+                                if new_week_number != int(week['week_number']):
+                                    existing_week = season_weeks[
+                                        (season_weeks['week_number'] == new_week_number) &
+                                        (season_weeks['id'] != week_id)
+                                    ]
+                                    if not existing_week.empty:
+                                        st.error(f"Week {new_week_number} already exists for this season!")
+                                        continue
+                                
+                                # Check if any changes were made
+                                changes_made = (
+                                    new_week_number != int(week['week_number']) or
+                                    new_total_games != int(week['total_games']) or
+                                    new_week_date.strftime('%Y-%m-%d') != week['week_date']
+                                )
+                                
+                                if changes_made:
+                                    if update_week(spreadsheet, week_id, new_week_number, new_total_games, new_week_date.strftime('%Y-%m-%d')):
+                                        st.success("Week updated successfully!")
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Error updating week.")
+                                else:
+                                    st.info("No changes made.")
+                        
+                        with col2:
+                            delete_key = f"delete_week_{unique_suffix}"
+                            confirm_key = f"confirm_delete_week_{week_id}"
+                            
+                            # Check if we're in confirmation mode
+                            in_confirmation = st.session_state.get(confirm_key, False)
+                            
+                            if not in_confirmation:
+                                if st.button("Delete Week", key=delete_key, type="secondary"):
+                                    st.session_state[confirm_key] = True
+                                    st.rerun()
+                            else:
+                                col2a, col2b = st.columns(2)
+                                with col2a:
+                                    if st.button("Confirm", key=f"confirm_week_{unique_suffix}", type="secondary"):
+                                        if delete_week(spreadsheet, week_id):
+                                            st.success("Week and all results deleted successfully!")
+                                            if confirm_key in st.session_state:
+                                                del st.session_state[confirm_key]
+                                            st.cache_data.clear()
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error("Error deleting week.")
+                                            if confirm_key in st.session_state:
+                                                del st.session_state[confirm_key]
+                                
+                                with col2b:
+                                    if st.button("Cancel", key=f"cancel_week_{unique_suffix}", type="secondary"):
+                                        if confirm_key in st.session_state:
+                                            del st.session_state[confirm_key]
+                                        st.rerun()
+                        
+                        with col3:
+                            if week_results_count > 0:
+                                st.write(f"⚠️ Has {week_results_count} results")
+                            else:
+                                st.write("✅ No results yet")
+                        
+                        # Show confirmation warning
+                        if st.session_state.get(confirm_key, False):
+                            if week_results_count > 0:
+                                st.warning(f"⚠️ This will delete the week AND all {week_results_count} results!")
+                            else:
+                                st.warning("⚠️ Confirm week deletion?")
             else:
                 st.info(f"No weeks found for season {current_season}.")
         else:
