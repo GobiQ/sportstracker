@@ -9,6 +9,8 @@ from google.oauth2.service_account import Credentials
 import json
 import time
 import numpy as np
+import uuid
+import hashlib
 
 # Streamlit App Configuration
 st.set_page_config(
@@ -62,6 +64,36 @@ def init_connection():
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
+
+# Cache sheet name mapping to avoid repeated lookups
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_sheet_name_mapping(spreadsheet_id):
+    """Get case-insensitive sheet name mapping"""
+    try:
+        spreadsheet = init_connection()
+        if not spreadsheet:
+            return {}
+        
+        worksheets = spreadsheet.worksheets()
+        sheet_names = [ws.title for ws in worksheets]
+        return {name.lower(): name for name in sheet_names}
+    except Exception as e:
+        st.error(f"Error getting sheet mapping: {e}")
+        return {}
+
+def get_actual_sheet_name(logical_name, spreadsheet_id):
+    """Get actual sheet name from logical name using cached mapping"""
+    mapping = get_sheet_name_mapping(spreadsheet_id)
+    return mapping.get(logical_name.lower(), logical_name)
+
+def generate_id():
+    """Generate unique ID using UUID4"""
+    return uuid.uuid4().hex
+
+def create_deterministic_key(*parts):
+    """Create deterministic key for Streamlit widgets"""
+    combined = "_".join(str(part) for part in parts)
+    return hashlib.md5(combined.encode()).hexdigest()[:12]
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes to reduce API calls
 def get_all_data(spreadsheet_id):
@@ -182,7 +214,146 @@ def delete_week(spreadsheet, week_id):
         st.error(f"Error deleting week: {e}")
         return False
 
+def update_player_name_batch(spreadsheet, player_id, new_name, spreadsheet_id=None):
+    """Update player name using batch operation"""
+    try:
+        actual_sheet_name = get_actual_sheet_name('players', spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        data = worksheet.get_all_records()
+        headers = worksheet.row_values(1)
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(player_id):
+                if 'name' in headers:
+                    col_letter = chr(ord('A') + headers.index('name'))
+                    worksheet.batch_update([{
+                        'range': f'{col_letter}{i}',
+                        'values': [[new_name]]
+                    }])
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating player: {e}")
+        return False
+
+def delete_player_batch(spreadsheet, player_id, spreadsheet_id=None):
+    """Delete player and all results using batch operations"""
+    try:
+        sheet_id = spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"]
+        
+        # Get sheet references
+        players_sheet_name = get_actual_sheet_name('players', sheet_id)
+        results_sheet_name = get_actual_sheet_name('results', sheet_id)
+        
+        players_worksheet = spreadsheet.worksheet(players_sheet_name)
+        results_worksheet = spreadsheet.worksheet(results_sheet_name)
+        
+        # Find player row to delete
+        players_data = players_worksheet.get_all_records()
+        player_row_to_delete = None
+        for i, row in enumerate(players_data, start=2):
+            if str(row.get('id', '')) == str(player_id):
+                player_row_to_delete = i
+                break
+        
+        # Find all result rows to delete
+        results_data = results_worksheet.get_all_records()
+        result_rows_to_delete = []
+        for i, row in enumerate(results_data, start=2):
+            if str(row.get('player_id', '')) == str(player_id):
+                result_rows_to_delete.append(i)
+        
+        # Batch delete all rows
+        rows_to_delete = []
+        if player_row_to_delete:
+            rows_to_delete.append((players_worksheet, player_row_to_delete))
+        
+        for row_num in result_rows_to_delete:
+            rows_to_delete.append((results_worksheet, row_num))
+        
+        # Execute batch deletes
+        if rows_to_delete:
+            # Group by worksheet for efficiency
+            players_rows = [row for ws, row in rows_to_delete if ws == players_worksheet]
+            results_rows = [row for ws, row in rows_to_delete if ws == results_worksheet]
+            
+            if players_rows:
+                delete_rows_batch(spreadsheet, 'players', players_rows, sheet_id)
+            if results_rows:
+                delete_rows_batch(spreadsheet, 'results', results_rows, sheet_id)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error deleting player: {e}")
+        return False
+
+def normalize_dates(df, date_columns):
+    """Normalize date columns to consistent format"""
+    df = df.copy()
+    for col in date_columns:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d')
+    return df
+
+def linear_regression_improved(x, y):
+    """Improved linear regression with better trend classification"""
+    try:
+        x = np.array(x)
+        y = np.array(y)
+        
+        if len(x) < 3 or len(y) < 3 or len(x) != len(y):
+            return 0, 0, 0, False, 0
+        
+        n = len(x)
+        sum_x = np.sum(x)
+        sum_y = np.sum(y)
+        sum_xy = np.sum(x * y)
+        sum_x2 = np.sum(x * x)
+        sum_y2 = np.sum(y * y)
+        
+        # Calculate slope (m) and intercept (b)
+        denominator = n * sum_x2 - sum_x * sum_x
+        if denominator == 0:
+            return 0, np.mean(y), 0, False, 0
+        
+        slope = (n * sum_xy - sum_x * sum_y) / denominator
+        intercept = (sum_y - slope * sum_x) / n
+        
+        # Calculate correlation coefficient (r)
+        numerator_r = n * sum_xy - sum_x * sum_y
+        denominator_r = np.sqrt((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y))
+        
+        if denominator_r == 0:
+            r_value = 0
+        else:
+            r_value = numerator_r / denominator_r
+        
+        # Use interpretable thresholds instead of fake p-values
+        r_squared = r_value ** 2
+        is_significant = abs(slope) >= 0.75 and r_squared >= 0.25
+        
+        # Calculate standard error
+        if n > 2:
+            y_pred = slope * x + intercept
+            residuals = y - y_pred
+            mse = np.sum(residuals**2) / (n - 2)
+            std_err = np.sqrt(mse / np.sum((x - np.mean(x))**2)) if np.sum((x - np.mean(x))**2) > 0 else 0
+        else:
+            std_err = 0
+        
+        return slope, intercept, r_value, is_significant, std_err
+        
+    except Exception:
+        return 0, 0, 0, False, 0
+
 def linear_regression(x, y):
+    """Wrapper to maintain compatibility"""
+    slope, intercept, r_value, is_significant, std_err = linear_regression_improved(x, y)
+    # Return old format with fake p_value for compatibility
+    p_value = 0.02 if is_significant else 0.3
+    return slope, intercept, r_value, p_value, std_err
     """Calculate linear regression without scipy dependency"""
     try:
         x = np.array(x)
@@ -236,6 +407,128 @@ def linear_regression(x, y):
         
     except Exception:
         return 0, 0, 0, 1, 0
+
+# Update player data adding to use new methods
+def add_players_batch(spreadsheet, player_names, spreadsheet_id=None):
+    """Add multiple players efficiently with duplicate checking"""
+    try:
+        # Check for duplicates against fresh data
+        existing_data = spreadsheet.worksheet(get_actual_sheet_name('players', spreadsheet_id)).get_all_records()
+        existing_names = {row.get('name', '') for row in existing_data}
+        
+        # Prepare batch data
+        batch_data = []
+        new_players = []
+        duplicate_players = []
+        
+        for name in player_names:
+            name = name.strip()
+            if name and name not in existing_names:
+                player_data = {
+                    'id': generate_id(),
+                    'name': name,
+                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                batch_data.append(player_data)
+                new_players.append(name)
+                existing_names.add(name)  # Prevent duplicates within this batch
+            elif name:
+                duplicate_players.append(name)
+        
+        # Batch save all new players
+        if batch_data:
+            if batch_update_sheet_optimized(spreadsheet, 'players', batch_data, 'append', spreadsheet_id):
+                return True, new_players, duplicate_players
+        
+        return False, [], duplicate_players
+        
+    except Exception as e:
+        st.error(f"Error adding players: {e}")
+        return False, [], []
+
+def add_week_batch(spreadsheet, week_data, spreadsheet_id=None):
+    """Add week with duplicate checking"""
+    try:
+        # Check for existing week number in season
+        existing_data = spreadsheet.worksheet(get_actual_sheet_name('weeks', spreadsheet_id)).get_all_records()
+        existing_weeks = {(row.get('season_year'), row.get('week_number')) for row in existing_data}
+        
+        check_key = (week_data['season_year'], week_data['week_number'])
+        if check_key in existing_weeks:
+            return False, "Week already exists for this season"
+        
+        # Add unique ID
+        week_data['id'] = generate_id()
+        week_data['created_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        if batch_update_sheet_optimized(spreadsheet, 'weeks', [week_data], 'append', spreadsheet_id):
+            return True, "Week added successfully"
+        
+        return False, "Error saving week"
+        
+    except Exception as e:
+        return False, f"Error adding week: {e}"
+
+def update_result_batch(spreadsheet, result_id, correct_guesses, status, spreadsheet_id=None):
+    """Update result using batch operation"""
+    try:
+        actual_sheet_name = get_actual_sheet_name('results', spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        data = worksheet.get_all_records()
+        headers = worksheet.row_values(1)
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(result_id):
+                # Prepare batch update
+                updates = []
+                
+                if 'correct_guesses' in headers:
+                    col_letter = chr(ord('A') + headers.index('correct_guesses'))
+                    value = correct_guesses if status != 'omitted' else ''
+                    updates.append({
+                        'range': f'{col_letter}{i}',
+                        'values': [[value]]
+                    })
+                
+                if 'status' in headers:
+                    col_letter = chr(ord('A') + headers.index('status'))
+                    updates.append({
+                        'range': f'{col_letter}{i}',
+                        'values': [[status]]
+                    })
+                
+                # Single batch update call
+                if updates:
+                    worksheet.batch_update(updates)
+                
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating result: {e}")
+        return False
+
+def normalize_data_types(data):
+    """Normalize data types for consistency"""
+    if data.empty:
+        return data
+    
+    data = data.copy()
+    
+    # Normalize numeric columns
+    numeric_cols = ['id', 'player_id', 'week_id', 'week_number', 'season_year', 'total_games', 'correct_guesses']
+    for col in numeric_cols:
+        if col in data.columns:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
+    
+    # Normalize date columns
+    date_cols = ['week_date', 'created_at']
+    for col in date_cols:
+        if col in data.columns:
+            data[col] = pd.to_datetime(data[col], errors='coerce').dt.strftime('%Y-%m-%d')
+    
+    return data
 
 def ensure_sheets_exist(spreadsheet):
     """Ensure all required sheets exist in the Google Sheet"""
@@ -320,7 +613,159 @@ def batch_update_sheet(spreadsheet, sheet_name, data_list, operation='append'):
         st.error(f"Error batch updating {sheet_name}: {e}")
         return False
 
-def update_player_name(spreadsheet, player_id, new_name):
+def batch_update_sheet_optimized(spreadsheet, sheet_name, data_list, operation='append', spreadsheet_id=None):
+    """Optimized batch update with single API call"""
+    try:
+        actual_sheet_name = get_actual_sheet_name(sheet_name, spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        if operation == 'append':
+            # Get headers once
+            headers = worksheet.row_values(1)
+            
+            # Convert all data to rows in one pass
+            rows = []
+            for data_dict in data_list:
+                row = []
+                for header in headers:
+                    value = data_dict.get(header, '')
+                    # Convert data types to native Python types
+                    if hasattr(value, 'item'):
+                        value = value.item()
+                    elif hasattr(value, 'tolist'):
+                        value = value.tolist()
+                    elif str(type(value)).startswith('<class \'pandas'):
+                        value = str(value)
+                    row.append(value)
+                rows.append(row)
+            
+            # Single batch append
+            if rows:
+                worksheet.append_rows(rows)
+            
+        return True
+        
+    except Exception as e:
+        st.error(f"Error batch updating {sheet_name}: {e}")
+        return False
+
+def check_and_prevent_duplicates(spreadsheet, sheet_name, new_data, unique_columns, spreadsheet_id=None):
+    """Check for duplicates before inserting to prevent race conditions"""
+    try:
+        actual_sheet_name = get_actual_sheet_name(sheet_name, spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        # Fresh read of just the target sheet
+        existing_data = worksheet.get_all_records()
+        existing_df = pd.DataFrame(existing_data)
+        
+        if existing_df.empty:
+            return new_data  # No existing data, all new records are safe
+        
+        # Create composite keys for duplicate checking
+        safe_records = []
+        for record in new_data:
+            composite_key = "|".join(str(record.get(col, '')) for col in unique_columns)
+            
+            # Check if this combination already exists
+            existing_composites = existing_df.apply(
+                lambda row: "|".join(str(row.get(col, '')) for col in unique_columns), 
+                axis=1
+            ).tolist()
+            
+            if composite_key not in existing_composites:
+                safe_records.append(record)
+        
+        return safe_records
+        
+    except Exception as e:
+        st.error(f"Error checking duplicates: {e}")
+        return new_data
+
+def update_week_batch(spreadsheet, week_id, week_number, total_games, week_date, spreadsheet_id=None):
+    """Update week using batch operations"""
+    try:
+        actual_sheet_name = get_actual_sheet_name('weeks', spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        # Get all data to find the row
+        data = worksheet.get_all_records()
+        headers = worksheet.row_values(1)
+        
+        # Find the row to update
+        for i, row in enumerate(data, start=2):
+            if str(row.get('id', '')) == str(week_id):
+                # Prepare batch update
+                updates = []
+                
+                if 'week_number' in headers:
+                    col_letter = chr(ord('A') + headers.index('week_number'))
+                    updates.append({
+                        'range': f'{col_letter}{i}',
+                        'values': [[week_number]]
+                    })
+                
+                if 'total_games' in headers:
+                    col_letter = chr(ord('A') + headers.index('total_games'))
+                    updates.append({
+                        'range': f'{col_letter}{i}',
+                        'values': [[total_games]]
+                    })
+                
+                if 'week_date' in headers:
+                    col_letter = chr(ord('A') + headers.index('week_date'))
+                    updates.append({
+                        'range': f'{col_letter}{i}',
+                        'values': [[week_date]]
+                    })
+                
+                # Single batch update call
+                if updates:
+                    worksheet.batch_update(updates)
+                
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating week: {e}")
+        return False
+
+def delete_rows_batch(spreadsheet, sheet_name, row_numbers, spreadsheet_id=None):
+    """Delete multiple rows in a single batch operation"""
+    try:
+        actual_sheet_name = get_actual_sheet_name(sheet_name, spreadsheet_id or st.secrets["connections"]["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(actual_sheet_name)
+        
+        if not row_numbers:
+            return True
+        
+        # Sort in reverse order to avoid index shifting
+        sorted_rows = sorted(row_numbers, reverse=True)
+        
+        # Group consecutive rows for efficient deletion
+        requests = []
+        for row_num in sorted_rows:
+            requests.append({
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": row_num - 1,  # 0-indexed
+                        "endIndex": row_num
+                    }
+                }
+            })
+        
+        # Single batch delete
+        if requests:
+            worksheet.spreadsheet.batch_update({"requests": requests})
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Error batch deleting rows: {e}")
+        return False
+
+def update_player_name_batch(spreadsheet, player_id, new_name, spreadsheet_id=None):
     """Update a player's name"""
     try:
         # Find actual sheet name (case-insensitive)
@@ -680,7 +1125,11 @@ def calculate_improvement_trends(data, season_year, min_weeks=3):
             accuracies = player_weeks['accuracy'].values
             
             # Linear regression to find trend
-            slope, intercept, r_value, p_value, std_err = linear_regression(weeks, accuracies)
+            slope, intercept, r_value, p_value, std_err = linear_regression_improved(weeks, accuracies)
+            r_squared = r_value ** 2
+            
+            # Use improved significance determination
+            is_significant = abs(slope) >= 0.75 and r_squared >= 0.25
             
             # Calculate performance metrics
             early_avg = player_weeks.head(min_weeks)['accuracy'].mean()
@@ -706,10 +1155,10 @@ def calculate_improvement_trends(data, season_year, min_weeks=3):
                 'recent_avg': round(recent_avg, 1),
                 'improvement': round(recent_avg - early_avg, 1),
                 'trend_slope': round(slope, 2),
-                'trend_r_squared': round(r_value**2, 3),
+                'trend_r_squared': round(r_squared, 3),
                 'volatility': round(volatility, 1),
                 'trend_category': trend_category,
-                'trend_significance': 'Significant' if p_value < 0.05 else 'Not Significant'
+                'trend_significance': 'Meaningful' if is_significant else 'Inconclusive'
             })
         
         return pd.DataFrame(trends)
@@ -917,44 +1366,38 @@ if page == "Enter Results":
                                 results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
                                 results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
                             
-                            next_id = get_next_id(data['results'])
-                            
                             for player_id, (correct_guesses, status) in results_to_save.items():
-                                # Check if result already exists
-                                existing = False
-                                if not results_df_for_updates.empty:
-                                    existing_mask = (
-                                        (results_df_for_updates['player_id'] == player_id) & 
-                                        (results_df_for_updates['week_id'] == selected_week_id)
-                                    )
-                                    if existing_mask.any():
-                                        existing = True
-                                
-                                if not existing:
-                                    # Add new result
-                                    result_data = {
-                                        'id': next_id,
-                                        'player_id': player_id,
-                                        'week_id': selected_week_id,
-                                        'correct_guesses': correct_guesses if status != 'omitted' else '',
-                                        'status': status,
-                                        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                    }
-                                    batch_data.append(result_data)
-                                    next_id += 1
+                                result_data = {
+                                    'id': generate_id(),
+                                    'player_id': player_id,
+                                    'week_id': selected_week_id,
+                                    'correct_guesses': correct_guesses if status != 'omitted' else '',
+                                    'status': status,
+                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                batch_data.append(result_data)
                             
-                            # Batch save all new results
+                            # Check for duplicates and batch save
                             if batch_data:
-                                if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
-                                    st.success(f"Saved {len(batch_data)} new results successfully!")
-                                    # Clear cache to reload data
-                                    st.cache_data.clear()
-                                    time.sleep(1)  # Small delay to ensure data is saved
-                                    st.rerun()
+                                safe_data = check_and_prevent_duplicates(
+                                    spreadsheet, 
+                                    'results', 
+                                    batch_data, 
+                                    ['player_id', 'week_id']
+                                )
+                                
+                                if safe_data:
+                                    if batch_update_sheet_optimized(spreadsheet, 'results', safe_data, 'append'):
+                                        st.success(f"Saved {len(safe_data)} new results successfully!")
+                                        if len(safe_data) < len(batch_data):
+                                            st.warning(f"Skipped {len(batch_data) - len(safe_data)} duplicate results.")
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Error saving results. Please try again.")
                                 else:
-                                    st.error("Error saving results. Please try again.")
-                            else:
-                                st.info("No new results to save. All players already have results for this week.")
+                                    st.info("No new results to save. All results already exist for this week.")
                     
                     else:  # Bulk Text Entry
                         st.write("**Bulk Text Entry**")
@@ -1913,41 +2356,24 @@ elif page == "Manage Players & Weeks":
                     player_names = [name.strip() for name in player_names_text.strip().split('\n') if name.strip()]
                     
                     if player_names:
-                        # Prepare batch data
-                        existing_players = set(data['players']['name'].tolist()) if not data['players'].empty else set()
-                        batch_data = []
-                        next_id = get_next_id(data['players'])
+                        # Use optimized batch add
+                        success, new_players, duplicate_players = add_players_batch(
+                            spreadsheet, 
+                            player_names, 
+                            st.secrets["connections"]["gsheets"]["spreadsheet"]
+                        )
                         
-                        new_players = []
-                        duplicate_players = []
-                        
-                        for name in player_names:
-                            if name not in existing_players:
-                                player_data = {
-                                    'id': next_id,
-                                    'name': name,
-                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                }
-                                batch_data.append(player_data)
-                                new_players.append(name)
-                                next_id += 1
-                            else:
-                                duplicate_players.append(name)
-                        
-                        # Batch save all new players
-                        if batch_data:
-                            if batch_update_sheet(spreadsheet, 'players', batch_data, 'append'):
-                                st.success(f"Added {len(new_players)} players successfully!")
-                                if duplicate_players:
-                                    st.warning(f"Skipped duplicates: {', '.join(duplicate_players)}")
-                                # Clear cache to reload data
-                                st.cache_data.clear()
-                                time.sleep(1)
-                                st.rerun()
-                            else:
-                                st.error("Error adding players. Please try again.")
-                        else:
+                        if success and new_players:
+                            st.success(f"Added {len(new_players)} players successfully!")
+                            if duplicate_players:
+                                st.warning(f"Skipped duplicates: {', '.join(duplicate_players)}")
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        elif not new_players and duplicate_players:
                             st.warning("All players already exist!")
+                        else:
+                            st.error("Error adding players. Please try again.")
                 else:
                     st.error("Please enter at least one player name.")
         
@@ -2014,7 +2440,7 @@ elif page == "Manage Players & Weeks":
                                 if new_name in players_df['name'].values:
                                     st.error("A player with this name already exists!")
                                 else:
-                                    if update_player_name(spreadsheet, player_id, new_name.strip()):
+                                    if update_player_name_batch(spreadsheet, player_id, new_name.strip()):
                                         st.success("Player updated successfully!")
                                         st.cache_data.clear()
                                         time.sleep(1)
@@ -2041,7 +2467,7 @@ elif page == "Manage Players & Weeks":
                             col2a, col2b = st.columns(2)
                             with col2a:
                                 if st.button("Confirm", key=f"confirm_player_{unique_suffix}", type="secondary"):
-                                    if delete_player(spreadsheet, player_id):
+                                    if delete_player_batch(spreadsheet, player_id):
                                         st.success("Player and all results deleted successfully!")
                                         if confirm_key in st.session_state:
                                             del st.session_state[confirm_key]
@@ -2089,57 +2515,27 @@ elif page == "Manage Players & Weeks":
                 week_date = st.date_input("Week Date:", value=date.today())
             
             if st.button("Add Week"):
-                # Check if week already exists
-                weeks_df = data['weeks'].copy()
-                if not weeks_df.empty:
-                    weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
-                    weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-                    existing = weeks_df[
-                        (weeks_df['season_year'] == current_season) & 
-                        (weeks_df['week_number'] == week_number)
-                    ]
-                    if not existing.empty:
-                        st.error("Week already exists for this season!")
-                    else:
-                        # Add new week
-                        next_id = get_next_id(data['weeks'])
-                        week_data = [{
-                            'id': next_id,
-                            'week_number': week_number,
-                            'season_year': current_season,
-                            'total_games': total_games,
-                            'week_date': week_date.strftime('%Y-%m-%d'),
-                            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        }]
-                        
-                        if batch_update_sheet(spreadsheet, 'weeks', week_data, 'append'):
-                            st.success("Week added successfully!")
-                            # Clear cache to reload data
-                            st.cache_data.clear()
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Error adding week. Please try again.")
+                # Use optimized batch add with duplicate checking
+                week_data = {
+                    'week_number': week_number,
+                    'season_year': current_season,
+                    'total_games': total_games,
+                    'week_date': week_date.strftime('%Y-%m-%d')
+                }
+                
+                success, message = add_week_batch(
+                    spreadsheet, 
+                    week_data, 
+                    st.secrets["connections"]["gsheets"]["spreadsheet"]
+                )
+                
+                if success:
+                    st.success(message)
+                    st.cache_data.clear()
+                    time.sleep(1)
+                    st.rerun()
                 else:
-                    # First week
-                    next_id = 1
-                    week_data = [{
-                        'id': next_id,
-                        'week_number': week_number,
-                        'season_year': current_season,
-                        'total_games': total_games,
-                        'week_date': week_date.strftime('%Y-%m-%d'),
-                        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }]
-                    
-                    if batch_update_sheet(spreadsheet, 'weeks', week_data, 'append'):
-                        st.success("Week added successfully!")
-                        # Clear cache to reload data
-                        st.cache_data.clear()
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Error adding week. Please try again.")
+                    st.error(message)
         
         # Show existing weeks with edit functionality
         weeks_df = data['weeks'].copy()
@@ -2168,7 +2564,7 @@ elif page == "Manage Players & Weeks":
                     
                     with st.expander(f"Week {int(week['week_number'])} - {week['week_date']} ({week_results_count} results)", expanded=False):
                         # Create unique keys
-                        unique_suffix = f"{week_id}_{hash(str(week['week_number']))}"
+                        unique_suffix = create_deterministic_key(week_id, "week_edit")
                         
                         col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
                         
@@ -2230,7 +2626,7 @@ elif page == "Manage Players & Weeks":
                                 )
                                 
                                 if changes_made:
-                                    if update_week(spreadsheet, week_id, new_week_number, new_total_games, new_week_date.strftime('%Y-%m-%d')):
+                                    if update_week_batch(spreadsheet, week_id, new_week_number, new_total_games, new_week_date.strftime('%Y-%m-%d')):
                                         st.success("Week updated successfully!")
                                         st.cache_data.clear()
                                         time.sleep(1)
@@ -2292,4 +2688,4 @@ elif page == "Manage Players & Weeks":
 
 # Footer
 st.markdown("---")
-st.markdown("Built for Bradley-san | PickLeague 2026")
+st.markdown("Built with ❤️ using Streamlit & Google Sheets | Youth Home Sports Prediction Tracker")
