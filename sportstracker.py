@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import time
 
 # Streamlit App Configuration
 st.set_page_config(
@@ -60,6 +61,49 @@ def init_connection():
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes to reduce API calls
+def get_all_data(spreadsheet_id):
+    """Get all data from all sheets in one batch operation"""
+    try:
+        spreadsheet = init_connection()
+        if not spreadsheet:
+            return {}
+        
+        # Get all sheets at once
+        worksheets = spreadsheet.worksheets()
+        sheet_names = [ws.title for ws in worksheets]
+        
+        data = {}
+        
+        # Find our required sheets (case-insensitive)
+        sheet_mapping = {}
+        for sheet_name in ['players', 'weeks', 'results']:
+            for actual_name in sheet_names:
+                if actual_name.lower() == sheet_name.lower():
+                    sheet_mapping[sheet_name] = actual_name
+                    break
+        
+        # Get data from each sheet
+        for logical_name, actual_name in sheet_mapping.items():
+            try:
+                worksheet = spreadsheet.worksheet(actual_name)
+                all_records = worksheet.get_all_records()
+                data[logical_name] = pd.DataFrame(all_records)
+            except Exception as e:
+                st.warning(f"Could not load {logical_name} sheet: {e}")
+                data[logical_name] = pd.DataFrame()
+        
+        # Ensure we have all required sheets
+        for sheet_name in ['players', 'weeks', 'results']:
+            if sheet_name not in data:
+                data[sheet_name] = pd.DataFrame()
+        
+        return data
+        
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return {'players': pd.DataFrame(), 'weeks': pd.DataFrame(), 'results': pd.DataFrame()}
+
 def ensure_sheets_exist(spreadsheet):
     """Ensure all required sheets exist in the Google Sheet"""
     try:
@@ -76,26 +120,24 @@ def ensure_sheets_exist(spreadsheet):
         
         for sheet_name, headers in required_sheets.items():
             if sheet_name.lower() in existing_sheets_lower:
-                # Sheet exists (possibly with different case), use the actual name
+                # Sheet exists, check headers
                 actual_sheet_name = existing_sheets_lower[sheet_name.lower()]
-                
                 worksheet = spreadsheet.worksheet(actual_sheet_name)
                 
                 try:
                     existing_headers = worksheet.row_values(1)
                     if not existing_headers or existing_headers != headers:
-                        # Clear first row and add correct headers
+                        # Update headers
                         if existing_headers:
                             worksheet.delete_rows(1, 1)
                         worksheet.insert_row(headers, 1)
-                except Exception as header_error:
-                    # Try to add headers anyway
+                except:
                     try:
                         worksheet.insert_row(headers, 1)
                     except:
                         pass
             else:
-                # Sheet doesn't exist, create it
+                # Create sheet
                 worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
                 worksheet.append_row(headers)
         
@@ -105,88 +147,44 @@ def ensure_sheets_exist(spreadsheet):
         st.error(f"Error setting up sheets: {e}")
         return False
 
-def get_worksheet_data(spreadsheet, sheet_name):
-    """Get data from a specific worksheet"""
+def batch_update_sheet(spreadsheet, sheet_name, data_list, operation='append'):
+    """Batch update a sheet with multiple rows at once"""
     try:
-        # Try to find the sheet with case-insensitive matching
+        # Find actual sheet name (case-insensitive)
         existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
         existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
-        
-        actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
-        
-        worksheet = spreadsheet.worksheet(actual_sheet_name)
-        data = worksheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception as e:
-        return pd.DataFrame()
-
-def append_to_worksheet(spreadsheet, sheet_name, data_dict):
-    """Append a row to a worksheet"""
-    try:
-        # Try to find the sheet with case-insensitive matching
-        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
-        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
-        
         actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
         
         worksheet = spreadsheet.worksheet(actual_sheet_name)
         
-        # Get headers to ensure correct order
-        headers = worksheet.row_values(1)
-        
-        # Create row in correct order, converting data types to native Python types
-        row = []
-        for header in headers:
-            value = data_dict.get(header, '')
-            # Convert numpy/pandas types to native Python types
-            if hasattr(value, 'item'):  # numpy scalar
-                value = value.item()
-            elif hasattr(value, 'tolist'):  # numpy array
-                value = value.tolist()
-            elif str(type(value)).startswith('<class \'pandas'):  # pandas types
-                value = str(value)
-            row.append(value)
-        
-        worksheet.append_row(row)
-        return True
-    except Exception as e:
-        st.error(f"Error adding data to {sheet_name}: {e}")
-        return False
-
-def update_worksheet_row(spreadsheet, sheet_name, row_id, updates):
-    """Update a specific row in a worksheet"""
-    try:
-        # Try to find the sheet with case-insensitive matching
-        existing_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
-        existing_sheets_lower = {sheet.lower(): sheet for sheet in existing_sheets}
-        
-        actual_sheet_name = existing_sheets_lower.get(sheet_name.lower(), sheet_name)
-        
-        worksheet = spreadsheet.worksheet(actual_sheet_name)
-        data = worksheet.get_all_records()
-        
-        # Find the row to update
-        for i, row in enumerate(data, start=2):  # Start at 2 because row 1 is headers
-            if str(row.get('id', '')) == str(row_id):
-                # Update specific cells
-                for column, value in updates.items():
+        if operation == 'append':
+            # Get headers
+            headers = worksheet.row_values(1)
+            
+            # Convert data to rows
+            rows = []
+            for data_dict in data_list:
+                row = []
+                for header in headers:
+                    value = data_dict.get(header, '')
                     # Convert data types to native Python types
-                    if hasattr(value, 'item'):  # numpy scalar
+                    if hasattr(value, 'item'):
                         value = value.item()
-                    elif hasattr(value, 'tolist'):  # numpy array
+                    elif hasattr(value, 'tolist'):
                         value = value.tolist()
-                    elif str(type(value)).startswith('<class \'pandas'):  # pandas types
+                    elif str(type(value)).startswith('<class \'pandas'):
                         value = str(value)
-                    
-                    # Find column index
-                    headers = worksheet.row_values(1)
-                    if column in headers:
-                        col_index = headers.index(column) + 1
-                        worksheet.update_cell(i, col_index, value)
-                return True
-        return False
+                    row.append(value)
+                rows.append(row)
+            
+            # Batch append all rows at once
+            if rows:
+                worksheet.append_rows(rows)
+            
+        return True
+        
     except Exception as e:
-        st.error(f"Error updating {sheet_name}: {e}")
+        st.error(f"Error batch updating {sheet_name}: {e}")
         return False
 
 def get_next_id(df):
@@ -194,158 +192,35 @@ def get_next_id(df):
     if df.empty or 'id' not in df.columns:
         return 1
     try:
-        # Convert to native Python int to avoid serialization issues
         max_id = int(df['id'].astype(int).max())
         return max_id + 1 if pd.notna(max_id) else 1
     except:
         return 1
 
-def add_player(spreadsheet, name):
-    """Add a new player to the players sheet"""
-    try:
-        players_df = get_worksheet_data(spreadsheet, 'players')
-        
-        # Check if player already exists
-        if not players_df.empty and name in players_df['name'].values:
-            return False
-        
-        # Add new player
-        new_id = get_next_id(players_df)
-        player_data = {
-            'id': new_id,
-            'name': name,
-            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        return append_to_worksheet(spreadsheet, 'players', player_data)
-    except Exception as e:
-        st.error(f"Error adding player: {e}")
-        return False
-
-def get_players(spreadsheet):
-    """Get all players from the players sheet"""
-    return get_worksheet_data(spreadsheet, 'players')
-
-def add_week(spreadsheet, week_number, season_year, total_games, week_date):
-    """Add a new week to the weeks sheet"""
-    try:
-        weeks_df = get_worksheet_data(spreadsheet, 'weeks')
-        
-        # Check if week already exists for this season
-        if not weeks_df.empty:
-            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
-            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-            existing = weeks_df[
-                (weeks_df['season_year'] == season_year) & 
-                (weeks_df['week_number'] == week_number)
-            ]
-            if not existing.empty:
-                return False
-        
-        new_id = get_next_id(weeks_df)
-        week_data = {
-            'id': new_id,
-            'week_number': week_number,
-            'season_year': season_year,
-            'total_games': total_games,
-            'week_date': week_date.strftime('%Y-%m-%d'),
-            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        return append_to_worksheet(spreadsheet, 'weeks', week_data)
-    except Exception as e:
-        st.error(f"Error adding week: {e}")
-        return False
-
-def get_weeks(spreadsheet, season_year=None):
-    """Get weeks from the weeks sheet with optional filters"""
-    try:
-        weeks_df = get_worksheet_data(spreadsheet, 'weeks')
-        
-        if weeks_df.empty:
-            return pd.DataFrame()
-        
-        # Convert data types
-        if 'season_year' in weeks_df.columns:
-            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
-        if 'week_number' in weeks_df.columns:
-            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
-        if 'id' in weeks_df.columns:
-            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
-        if 'total_games' in weeks_df.columns:
-            weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
-        
-        # Apply filters
-        if season_year is not None:
-            weeks_df = weeks_df[weeks_df['season_year'] == season_year]
-        
-        return weeks_df.sort_values(['season_year', 'week_number'])
-    except Exception as e:
-        st.error(f"Error getting weeks: {e}")
-        return pd.DataFrame()
-
-def add_or_update_result(spreadsheet, player_id, week_id, correct_guesses, status):
-    """Add or update a player's result for a week"""
-    try:
-        results_df = get_worksheet_data(spreadsheet, 'results')
-        
-        # Check if result already exists
-        if not results_df.empty:
-            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
-            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
-            
-            existing_mask = (results_df['player_id'] == player_id) & (results_df['week_id'] == week_id)
-            if existing_mask.any():
-                # Update existing result
-                existing_result = results_df[existing_mask].iloc[0]
-                updates = {
-                    'correct_guesses': correct_guesses if status != 'omitted' else '',
-                    'status': status
-                }
-                return update_worksheet_row(spreadsheet, 'results', existing_result['id'], updates)
-        
-        # Add new result
-        new_id = get_next_id(results_df)
-        result_data = {
-            'id': new_id,
-            'player_id': player_id,
-            'week_id': week_id,
-            'correct_guesses': correct_guesses if status != 'omitted' else '',
-            'status': status,
-            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        return append_to_worksheet(spreadsheet, 'results', result_data)
-    except Exception as e:
-        st.error(f"Error adding result: {e}")
-        return False
-
-def get_results(spreadsheet):
-    """Get all results from the results sheet"""
-    try:
-        results_df = get_worksheet_data(spreadsheet, 'results')
-        
-        if not results_df.empty:
-            # Convert data types
-            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
-            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
-            results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
-        
-        return results_df
-    except:
-        return pd.DataFrame()
-
-def calculate_standings(spreadsheet, season_year, week_number=None):
+def calculate_standings(data, season_year, week_number=None):
     """Calculate standings with both absolute and adjusted statistics"""
     try:
-        players_df = get_players(spreadsheet)
-        weeks_df = get_weeks(spreadsheet, season_year=season_year)
-        results_df = get_results(spreadsheet)
+        players_df = data['players'].copy()
+        weeks_df = data['weeks'].copy()
+        results_df = data['results'].copy()
         
         if players_df.empty or weeks_df.empty:
             return pd.DataFrame()
         
+        # Convert data types
+        if not weeks_df.empty:
+            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+            weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
+        
+        if not results_df.empty:
+            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+            results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
+        
         # Filter weeks
+        weeks_df = weeks_df[weeks_df['season_year'] == season_year]
         if week_number is not None:
             weeks_df = weeks_df[weeks_df['week_number'] == week_number]
         
@@ -357,8 +232,9 @@ def calculate_standings(spreadsheet, season_year, week_number=None):
         # Calculate standings for each player
         standings = []
         for _, player in players_df.iterrows():
+            player_id = int(player['id'])
             player_results = results_df[
-                (results_df['player_id'] == player['id']) & 
+                (results_df['player_id'] == player_id) & 
                 (results_df['week_id'].isin(week_ids))
             ]
             
@@ -375,24 +251,24 @@ def calculate_standings(spreadsheet, season_year, week_number=None):
             
             # Calculate totals
             for _, week in weeks_df.iterrows():
-                week_result = player_results[player_results['week_id'] == week['id']]
+                week_id = int(week['id'])
+                week_result = player_results[player_results['week_id'] == week_id]
                 
                 if not week_result.empty:
                     result = week_result.iloc[0]
                     if result['status'] == 'omitted':
                         # For absolute stats, count as 0 correct out of total_games
-                        total_possible_absolute += week['total_games']
-                        # For adjusted stats, don't count this week
+                        total_possible_absolute += int(week['total_games'])
                     else:
                         # Count for both absolute and adjusted
-                        correct = result['correct_guesses'] if pd.notna(result['correct_guesses']) else 0
+                        correct = int(result['correct_guesses']) if pd.notna(result['correct_guesses']) else 0
                         total_correct_absolute += correct
-                        total_possible_absolute += week['total_games']
+                        total_possible_absolute += int(week['total_games'])
                         total_correct_adjusted += correct
-                        total_possible_adjusted += week['total_games']
+                        total_possible_adjusted += int(week['total_games'])
                 else:
                     # No result recorded - treat as 0 for absolute, skip for adjusted
-                    total_possible_absolute += week['total_games']
+                    total_possible_absolute += int(week['total_games'])
             
             # Calculate percentages
             accuracy_absolute = (total_correct_absolute / total_possible_absolute * 100) if total_possible_absolute > 0 else 0
@@ -429,22 +305,37 @@ def calculate_standings(spreadsheet, season_year, week_number=None):
         st.error(f"Error calculating standings: {e}")
         return pd.DataFrame()
 
-def get_player_history(spreadsheet, player_name, season_year):
+def get_player_history(data, player_name, season_year):
     """Get a player's history for a season"""
     try:
-        players_df = get_players(spreadsheet)
-        weeks_df = get_weeks(spreadsheet, season_year=season_year)
-        results_df = get_results(spreadsheet)
+        players_df = data['players'].copy()
+        weeks_df = data['weeks'].copy()
+        results_df = data['results'].copy()
         
         if players_df.empty or weeks_df.empty:
             return pd.DataFrame()
+        
+        # Convert data types
+        if not weeks_df.empty:
+            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+            weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+            weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
+        
+        if not results_df.empty:
+            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+            results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
         # Get player ID
         player_row = players_df[players_df['name'] == player_name]
         if player_row.empty:
             return pd.DataFrame()
         
-        player_id = player_row.iloc[0]['id']
+        player_id = int(player_row.iloc[0]['id'])
+        
+        # Filter weeks for season
+        weeks_df = weeks_df[weeks_df['season_year'] == season_year]
         
         # Get player's results
         player_results = results_df[results_df['player_id'] == player_id]
@@ -495,6 +386,14 @@ if 'sheets_initialized' not in st.session_state:
             st.error("Could not set up Google Sheets. Please check your permissions.")
             st.stop()
 
+# Load all data once
+if 'data_loaded_time' not in st.session_state or (datetime.now() - st.session_state.data_loaded_time).seconds > 300:
+    with st.spinner("Loading data..."):
+        st.session_state.data = get_all_data(st.secrets["connections"]["gsheets"]["spreadsheet"])
+        st.session_state.data_loaded_time = datetime.now()
+
+data = st.session_state.data
+
 st.title("🏆 Youth Home Sports Prediction Tracker")
 st.markdown("Track weekly sports prediction results with omission handling")
 
@@ -511,183 +410,257 @@ page = st.sidebar.selectbox("Choose a page:", [
 # Get current season year
 current_season = st.sidebar.selectbox("Season Year:", [2024, 2025, 2026], index=1)
 
+# Add refresh button
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.session_state.data = get_all_data(st.secrets["connections"]["gsheets"]["spreadsheet"])
+    st.session_state.data_loaded_time = datetime.now()
+    st.rerun()
+
 if page == "Enter Results":
     st.header("Enter Weekly Results")
     
-    # Get available weeks for current season
-    weeks_df = get_weeks(spreadsheet, season_year=current_season)
+    weeks_df = data['weeks'].copy()
     if not weeks_df.empty:
-        # Show week selector
-        week_options = []
-        for _, week in weeks_df.iterrows():
-            week_options.append({
-                'label': f"Week {week['week_number']} ({week['total_games']} games) - {week['week_date']}",
-                'value': week['id'],
-                'week_number': week['week_number'],
-                'total_games': week['total_games']
-            })
+        # Convert data types
+        weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+        weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+        weeks_df['id'] = pd.to_numeric(weeks_df['id'], errors='coerce')
+        weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
-        selected_week_option = st.selectbox(
-            "Select Week:", 
-            week_options,
-            format_func=lambda x: x['label']
-        )
+        # Filter for current season
+        season_weeks = weeks_df[weeks_df['season_year'] == current_season]
         
-        if selected_week_option:
-            selected_week_id = selected_week_option['value']
-            selected_week_number = selected_week_option['week_number']
-            total_games = selected_week_option['total_games']
+        if not season_weeks.empty:
+            # Show week selector
+            week_options = []
+            for _, week in season_weeks.iterrows():
+                week_options.append({
+                    'label': f"Week {int(week['week_number'])} ({int(week['total_games'])} games) - {week['week_date']}",
+                    'value': int(week['id']),
+                    'week_number': int(week['week_number']),
+                    'total_games': int(week['total_games'])
+                })
             
-            st.subheader(f"Week {selected_week_number} Results ({total_games} total games)")
+            selected_week_option = st.selectbox(
+                "Select Week:", 
+                week_options,
+                format_func=lambda x: x['label']
+            )
             
-            # Get players and existing results
-            players_df = get_players(spreadsheet)
-            results_df = get_results(spreadsheet)
-            
-            if not players_df.empty:
-                # Create input form for each player
-                results_to_save = {}
+            if selected_week_option:
+                selected_week_id = selected_week_option['value']
+                selected_week_number = selected_week_option['week_number']
+                total_games = selected_week_option['total_games']
                 
-                st.write("Enter results for each player:")
+                st.subheader(f"Week {selected_week_number} Results ({total_games} total games)")
                 
-                for _, player in players_df.iterrows():
-                    with st.container():
-                        col1, col2, col3 = st.columns([2, 2, 1])
+                # Get players and existing results
+                players_df = data['players'].copy()
+                results_df = data['results'].copy()
+                
+                if not players_df.empty:
+                    # Convert data types for results
+                    if not results_df.empty:
+                        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                        results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                        results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
+                    
+                    # Create input form for each player
+                    results_to_save = {}
+                    
+                    st.write("Enter results for each player:")
+                    
+                    for _, player in players_df.iterrows():
+                        player_id = int(player['id'])
                         
-                        with col1:
-                            st.write(f"**{player['name']}**")
-                        
-                        # Get existing result if any
-                        existing_result = None
-                        if not results_df.empty:
-                            existing_mask = (
-                                (results_df['player_id'] == player['id']) & 
-                                (results_df['week_id'] == selected_week_id)
-                            )
-                            if existing_mask.any():
-                                existing_result = results_df[existing_mask].iloc[0]
-                        
-                        with col2:
-                            # Status selector
-                            status_options = ['participated', 'omitted']
-                            default_status = 0
-                            if existing_result is not None and existing_result['status'] == 'omitted':
-                                default_status = 1
+                        with st.container():
+                            col1, col2, col3 = st.columns([2, 2, 1])
                             
-                            status = st.selectbox(
-                                "Status:",
-                                status_options,
-                                key=f"status_{player['id']}",
-                                index=default_status,
-                                label_visibility="collapsed"
-                            )
-                        
-                        with col3:
-                            if status == 'participated':
-                                # Correct guesses input
-                                default_correct = 0
-                                if existing_result is not None and pd.notna(existing_result['correct_guesses']):
-                                    default_correct = int(existing_result['correct_guesses'])
+                            with col1:
+                                st.write(f"**{player['name']}**")
+                            
+                            # Get existing result if any
+                            existing_result = None
+                            if not results_df.empty:
+                                existing_mask = (
+                                    (results_df['player_id'] == player_id) & 
+                                    (results_df['week_id'] == selected_week_id)
+                                )
+                                if existing_mask.any():
+                                    existing_result = results_df[existing_mask].iloc[0]
+                            
+                            with col2:
+                                # Status selector
+                                status_options = ['participated', 'omitted']
+                                default_status = 0
+                                if existing_result is not None and existing_result['status'] == 'omitted':
+                                    default_status = 1
                                 
-                                correct_guesses = st.number_input(
-                                    f"Correct guesses (0-{total_games}):",
-                                    min_value=0,
-                                    max_value=int(total_games),
-                                    value=default_correct,
-                                    key=f"correct_{player['id']}",
+                                status = st.selectbox(
+                                    "Status:",
+                                    status_options,
+                                    key=f"status_{player_id}",
+                                    index=default_status,
                                     label_visibility="collapsed"
                                 )
-                                results_to_save[player['id']] = (correct_guesses, status)
-                            else:
-                                st.write("—")
-                                results_to_save[player['id']] = (0, status)
+                            
+                            with col3:
+                                if status == 'participated':
+                                    # Correct guesses input
+                                    default_correct = 0
+                                    if existing_result is not None and pd.notna(existing_result['correct_guesses']):
+                                        default_correct = int(existing_result['correct_guesses'])
+                                    
+                                    correct_guesses = st.number_input(
+                                        f"Correct guesses (0-{total_games}):",
+                                        min_value=0,
+                                        max_value=total_games,
+                                        value=default_correct,
+                                        key=f"correct_{player_id}",
+                                        label_visibility="collapsed"
+                                    )
+                                    results_to_save[player_id] = (correct_guesses, status)
+                                else:
+                                    st.write("—")
+                                    results_to_save[player_id] = (0, status)
+                            
+                            st.divider()
+                    
+                    # Save button
+                    if st.button("Save All Results", type="primary"):
+                        # Prepare batch data
+                        batch_data = []
+                        results_df_for_updates = data['results'].copy()
                         
-                        st.divider()
-                
-                # Save button
-                if st.button("Save All Results", type="primary"):
-                    success_count = 0
-                    total_count = len(results_to_save)
-                    
-                    for player_id, (correct_guesses, status) in results_to_save.items():
-                        if add_or_update_result(spreadsheet, player_id, selected_week_id, correct_guesses, status):
-                            success_count += 1
-                    
-                    if success_count == total_count:
-                        st.success("All results saved successfully!")
-                        st.rerun()
-                    else:
-                        st.warning(f"Saved {success_count} out of {total_count} results. Some may have failed.")
-            else:
-                st.warning("No players found. Please add players in the 'Manage Players & Weeks' section.")
+                        if not results_df_for_updates.empty:
+                            results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
+                            results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
+                        
+                        next_id = get_next_id(data['results'])
+                        
+                        for player_id, (correct_guesses, status) in results_to_save.items():
+                            # Check if result already exists
+                            existing = False
+                            if not results_df_for_updates.empty:
+                                existing_mask = (
+                                    (results_df_for_updates['player_id'] == player_id) & 
+                                    (results_df_for_updates['week_id'] == selected_week_id)
+                                )
+                                if existing_mask.any():
+                                    existing = True
+                            
+                            if not existing:
+                                # Add new result
+                                result_data = {
+                                    'id': next_id,
+                                    'player_id': player_id,
+                                    'week_id': selected_week_id,
+                                    'correct_guesses': correct_guesses if status != 'omitted' else '',
+                                    'status': status,
+                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                batch_data.append(result_data)
+                                next_id += 1
+                        
+                        # Batch save all new results
+                        if batch_data:
+                            if batch_update_sheet(spreadsheet, 'results', batch_data, 'append'):
+                                st.success(f"Saved {len(batch_data)} new results successfully!")
+                                # Clear cache to reload data
+                                st.cache_data.clear()
+                                time.sleep(1)  # Small delay to ensure data is saved
+                                st.rerun()
+                            else:
+                                st.error("Error saving results. Please try again.")
+                        else:
+                            st.info("No new results to save. All players already have results for this week.")
+                else:
+                    st.warning("No players found. Please add players in the 'Manage Players & Weeks' section.")
+        else:
+            st.info("No weeks found for the current season. Please add weeks in the 'Manage Players & Weeks' section.")
     else:
-        st.info("No weeks found for the current season. Please add weeks in the 'Manage Players & Weeks' section.")
+        st.info("No weeks found. Please add weeks in the 'Manage Players & Weeks' section.")
 
 elif page == "Weekly Standings":
     st.header("Weekly Standings")
     
-    weeks_df = get_weeks(spreadsheet, season_year=current_season)
+    weeks_df = data['weeks'].copy()
     if not weeks_df.empty:
-        # Get weeks that have at least some results
-        results_df = get_results(spreadsheet)
-        weeks_with_results = []
+        # Convert data types
+        weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+        weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
         
-        for _, week in weeks_df.iterrows():
-            week_results = results_df[results_df['week_id'] == week['id']]
-            if not week_results.empty:
-                weeks_with_results.append(week['week_number'])
+        # Filter for current season
+        season_weeks = weeks_df[weeks_df['season_year'] == current_season]
         
-        if weeks_with_results:
-            selected_week = st.selectbox("Select Week:", sorted(weeks_with_results))
+        if not season_weeks.empty:
+            # Get weeks that have results
+            results_df = data['results'].copy()
+            weeks_with_results = []
             
-            standings_df = calculate_standings(spreadsheet, current_season, week_number=selected_week)
+            if not results_df.empty:
+                results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                
+                for _, week in season_weeks.iterrows():
+                    week_id = int(week['id'])
+                    week_results = results_df[results_df['week_id'] == week_id]
+                    if not week_results.empty:
+                        weeks_with_results.append(int(week['week_number']))
             
-            if not standings_df.empty:
-                st.subheader(f"Week {selected_week} Standings")
+            if weeks_with_results:
+                selected_week = st.selectbox("Select Week:", sorted(weeks_with_results))
                 
-                # Show both absolute and adjusted statistics
-                col1, col2 = st.columns(2)
+                standings_df = calculate_standings(data, current_season, week_number=selected_week)
                 
-                with col1:
-                    st.write("**📊 Absolute Statistics** (including omissions as 0)")
-                    abs_display = standings_df.copy()
-                    abs_display['rank'] = range(1, len(abs_display) + 1)
-                    abs_display = abs_display[['rank', 'player_name', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
-                    abs_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
-                    st.dataframe(abs_display, use_container_width=True, hide_index=True)
-                
-                with col2:
-                    st.write("**🎯 Adjusted Statistics** (excluding omissions)")
-                    adj_display = standings_df.copy()
-                    adj_display['rank'] = range(1, len(adj_display) + 1)
-                    adj_display = adj_display[['rank', 'player_name', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted']]
-                    adj_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
-                    st.dataframe(adj_display, use_container_width=True, hide_index=True)
-                
-                # Visualization
-                fig = px.bar(
-                    standings_df.head(10), 
-                    x='player_name', 
-                    y=['accuracy_absolute', 'accuracy_adjusted'],
-                    title=f'Week {selected_week} - Accuracy Comparison',
-                    barmode='group',
-                    color_discrete_map={'accuracy_absolute': '#ff7f7f', 'accuracy_adjusted': '#7fbf7f'}
-                )
-                fig.update_layout(xaxis_tickangle=-45)
-                fig.update_traces(name='Absolute', selector=dict(name='accuracy_absolute'))
-                fig.update_traces(name='Adjusted', selector=dict(name='accuracy_adjusted'))
-                st.plotly_chart(fig, use_container_width=True)
+                if not standings_df.empty:
+                    st.subheader(f"Week {selected_week} Standings")
+                    
+                    # Show both absolute and adjusted statistics
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**📊 Absolute Statistics** (including omissions as 0)")
+                        abs_display = standings_df.copy()
+                        abs_display['rank'] = range(1, len(abs_display) + 1)
+                        abs_display = abs_display[['rank', 'player_name', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
+                        abs_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
+                        st.dataframe(abs_display, use_container_width=True, hide_index=True)
+                    
+                    with col2:
+                        st.write("**🎯 Adjusted Statistics** (excluding omissions)")
+                        adj_display = standings_df.copy()
+                        adj_display['rank'] = range(1, len(adj_display) + 1)
+                        adj_display = adj_display[['rank', 'player_name', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted']]
+                        adj_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
+                        st.dataframe(adj_display, use_container_width=True, hide_index=True)
+                    
+                    # Visualization
+                    fig = px.bar(
+                        standings_df.head(10), 
+                        x='player_name', 
+                        y=['accuracy_absolute', 'accuracy_adjusted'],
+                        title=f'Week {selected_week} - Accuracy Comparison',
+                        barmode='group',
+                        color_discrete_map={'accuracy_absolute': '#ff7f7f', 'accuracy_adjusted': '#7fbf7f'}
+                    )
+                    fig.update_layout(xaxis_tickangle=-45)
+                    fig.update_traces(name='Absolute', selector=dict(name='accuracy_absolute'))
+                    fig.update_traces(name='Adjusted', selector=dict(name='accuracy_adjusted'))
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info(f"No results found for week {selected_week}")
             else:
-                st.info(f"No results found for week {selected_week}")
+                st.info("No weeks with results found for the current season.")
         else:
-            st.info("No weeks with results found for the current season.")
+            st.info("No weeks found for the current season.")
     else:
-        st.info("No weeks found for the current season.")
+        st.info("No weeks found.")
 
 elif page == "Season Standings":
     st.header("Season Standings")
     
-    standings_df = calculate_standings(spreadsheet, current_season)
+    standings_df = calculate_standings(data, current_season)
     
     if not standings_df.empty:
         st.subheader(f"Season {current_season} Overall Standings")
@@ -765,11 +738,11 @@ elif page == "Season Standings":
 elif page == "Player History":
     st.header("Player History")
     
-    players_df = get_players(spreadsheet)
+    players_df = data['players'].copy()
     if not players_df.empty:
         selected_player = st.selectbox("Select Player:", players_df['name'].tolist(), key="player_history")
         
-        history_df = get_player_history(spreadsheet, selected_player, current_season)
+        history_df = get_player_history(data, selected_player, current_season)
         
         if not history_df.empty:
             st.subheader(f"{selected_player}'s Season {current_season} History")
@@ -859,21 +832,56 @@ elif page == "Manage Players & Weeks":
     with tab1:
         st.subheader("Manage Players")
         
-        # Add new player
-        with st.expander("Add New Player"):
-            new_player_name = st.text_input("Player Name:")
-            if st.button("Add Player"):
-                if new_player_name.strip():
-                    if add_player(spreadsheet, new_player_name.strip()):
-                        st.success(f"Player '{new_player_name}' added successfully!")
-                        st.rerun()
-                    else:
-                        st.error("Player already exists or error occurred!")
+        # Add multiple players at once
+        with st.expander("Add Players"):
+            st.write("Add one or multiple players (one per line):")
+            player_names_text = st.text_area("Player Names:", height=100, placeholder="Enter player names, one per line")
+            
+            if st.button("Add Players"):
+                if player_names_text.strip():
+                    player_names = [name.strip() for name in player_names_text.strip().split('\n') if name.strip()]
+                    
+                    if player_names:
+                        # Prepare batch data
+                        existing_players = set(data['players']['name'].tolist()) if not data['players'].empty else set()
+                        batch_data = []
+                        next_id = get_next_id(data['players'])
+                        
+                        new_players = []
+                        duplicate_players = []
+                        
+                        for name in player_names:
+                            if name not in existing_players:
+                                player_data = {
+                                    'id': next_id,
+                                    'name': name,
+                                    'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                batch_data.append(player_data)
+                                new_players.append(name)
+                                next_id += 1
+                            else:
+                                duplicate_players.append(name)
+                        
+                        # Batch save all new players
+                        if batch_data:
+                            if batch_update_sheet(spreadsheet, 'players', batch_data, 'append'):
+                                st.success(f"Added {len(new_players)} players successfully!")
+                                if duplicate_players:
+                                    st.warning(f"Skipped duplicates: {', '.join(duplicate_players)}")
+                                # Clear cache to reload data
+                                st.cache_data.clear()
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("Error adding players. Please try again.")
+                        else:
+                            st.warning("All players already exist!")
                 else:
-                    st.error("Please enter a valid name.")
+                    st.error("Please enter at least one player name.")
         
         # Show existing players
-        players_df = get_players(spreadsheet)
+        players_df = data['players']
         if not players_df.empty:
             st.subheader("Current Players")
             st.dataframe(players_df[['name', 'created_at']], use_container_width=True, hide_index=True)
@@ -895,32 +903,91 @@ elif page == "Manage Players & Weeks":
                 week_date = st.date_input("Week Date:", value=date.today())
             
             if st.button("Add Week"):
-                if add_week(spreadsheet, week_number, current_season, total_games, week_date):
-                    st.success("Week added successfully!")
-                    st.rerun()
+                # Check if week already exists
+                weeks_df = data['weeks'].copy()
+                if not weeks_df.empty:
+                    weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+                    weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
+                    existing = weeks_df[
+                        (weeks_df['season_year'] == current_season) & 
+                        (weeks_df['week_number'] == week_number)
+                    ]
+                    if not existing.empty:
+                        st.error("Week already exists for this season!")
+                    else:
+                        # Add new week
+                        next_id = get_next_id(data['weeks'])
+                        week_data = [{
+                            'id': next_id,
+                            'week_number': week_number,
+                            'season_year': current_season,
+                            'total_games': total_games,
+                            'week_date': week_date.strftime('%Y-%m-%d'),
+                            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }]
+                        
+                        if batch_update_sheet(spreadsheet, 'weeks', week_data, 'append'):
+                            st.success("Week added successfully!")
+                            # Clear cache to reload data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Error adding week. Please try again.")
                 else:
-                    st.error("Week already exists for this season or error occurred!")
+                    # First week
+                    next_id = 1
+                    week_data = [{
+                        'id': next_id,
+                        'week_number': week_number,
+                        'season_year': current_season,
+                        'total_games': total_games,
+                        'week_date': week_date.strftime('%Y-%m-%d'),
+                        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }]
+                    
+                    if batch_update_sheet(spreadsheet, 'weeks', week_data, 'append'):
+                        st.success("Week added successfully!")
+                        # Clear cache to reload data
+                        st.cache_data.clear()
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Error adding week. Please try again.")
         
         # Show existing weeks
-        weeks_df = get_weeks(spreadsheet, season_year=current_season)
+        weeks_df = data['weeks'].copy()
         if not weeks_df.empty:
-            st.subheader(f"Weeks for Season {current_season}")
+            # Convert data types
+            weeks_df['season_year'] = pd.to_numeric(weeks_df['season_year'], errors='coerce')
+            weeks_df['week_number'] = pd.to_numeric(weeks_df['week_number'], errors='coerce')
             
-            # Get results count for each week
-            results_df = get_results(spreadsheet)
-            weeks_display = weeks_df.copy()
+            season_weeks = weeks_df[weeks_df['season_year'] == current_season]
             
-            weeks_display['results_count'] = weeks_display['id'].apply(
-                lambda week_id: len(results_df[results_df['week_id'] == week_id]) if not results_df.empty else 0
-            )
-            
-            display_cols = ['week_number', 'week_date', 'total_games', 'results_count']
-            weeks_display = weeks_display[display_cols]
-            weeks_display.columns = ['Week #', 'Date', 'Total Games', 'Results Entered']
-            
-            st.dataframe(weeks_display, use_container_width=True, hide_index=True)
+            if not season_weeks.empty:
+                st.subheader(f"Weeks for Season {current_season}")
+                
+                # Get results count for each week
+                results_df = data['results'].copy()
+                weeks_display = season_weeks.copy()
+                
+                if not results_df.empty:
+                    results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
+                    weeks_display['results_count'] = weeks_display['id'].apply(
+                        lambda week_id: len(results_df[results_df['week_id'] == week_id])
+                    )
+                else:
+                    weeks_display['results_count'] = 0
+                
+                display_cols = ['week_number', 'week_date', 'total_games', 'results_count']
+                weeks_display = weeks_display[display_cols]
+                weeks_display.columns = ['Week #', 'Date', 'Total Games', 'Results Entered']
+                
+                st.dataframe(weeks_display, use_container_width=True, hide_index=True)
+            else:
+                st.info(f"No weeks found for season {current_season}.")
         else:
-            st.info(f"No weeks found for season {current_season}.")
+            st.info("No weeks found.")
 
 # Footer
 st.markdown("---")
