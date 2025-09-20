@@ -911,7 +911,8 @@ def calculate_standings(data, season_year, week_number=None):
             weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         if not results_df.empty:
-            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            # Keep player_id as string since it's a UUID4 hex
+            results_df['player_id'] = results_df['player_id'].astype(str)
             results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
             results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
@@ -928,7 +929,7 @@ def calculate_standings(data, season_year, week_number=None):
         # Calculate standings for each player
         standings = []
         for _, player in players_df.iterrows():
-            player_id = int(player['id'])
+            player_id = str(player['id'])  # Keep as string since it's a UUID4 hex
             player_results = results_df[
                 (results_df['player_id'] == player_id) & 
                 (results_df['week_id'].isin(week_ids))
@@ -1019,7 +1020,8 @@ def get_player_history(data, player_name, season_year):
             weeks_df['total_games'] = pd.to_numeric(weeks_df['total_games'], errors='coerce')
         
         if not results_df.empty:
-            results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+            # Keep player_id as string since it's a UUID4 hex
+            results_df['player_id'] = results_df['player_id'].astype(str)
             results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
             results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
         
@@ -1028,7 +1030,7 @@ def get_player_history(data, player_name, season_year):
         if player_row.empty:
             return pd.DataFrame()
         
-        player_id = int(player_row.iloc[0]['id'])
+        player_id = str(player_row.iloc[0]['id'])  # Keep as string since it's a UUID4 hex
         
         # Filter weeks for season
         weeks_df = weeks_df[weeks_df['season_year'] == season_year]
@@ -1094,7 +1096,7 @@ def calculate_improvement_trends(data, season_year, min_weeks=3):
         trends = []
         
         for _, player in players_df.iterrows():
-            player_id = int(player['id'])
+            player_id = str(player['id'])  # Keep as string since it's a UUID4 hex
             player_name = player['name']
             
             # Get player's participated results for the season
@@ -1283,7 +1285,8 @@ if page == "Enter Results":
                 if not players_df.empty:
                     # Convert data types for results
                     if not results_df.empty:
-                        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                        # Keep player_id as string since it's a UUID4 hex
+                        results_df['player_id'] = results_df['player_id'].astype(str)
                         results_df['week_id'] = pd.to_numeric(results_df['week_id'], errors='coerce')
                         results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
                     
@@ -1498,7 +1501,8 @@ Sarah Wilson: 9""")
                                     results_df_for_updates = data['results'].copy()
                                     
                                     if not results_df_for_updates.empty:
-                                        results_df_for_updates['player_id'] = pd.to_numeric(results_df_for_updates['player_id'], errors='coerce')
+                                        # Keep player_id as string since it's a UUID4 hex
+                                        results_df_for_updates['player_id'] = results_df_for_updates['player_id'].astype(str)
                                         results_df_for_updates['week_id'] = pd.to_numeric(results_df_for_updates['week_id'], errors='coerce')
                                     
                                     next_id = get_next_id(data['results'])
@@ -2222,7 +2226,8 @@ elif page == "Edit Results":
                     
                     if not players_df.empty and not results_df.empty:
                         # Convert data types
-                        results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                        # Keep player_id as string since it's a UUID4 hex
+                        results_df['player_id'] = results_df['player_id'].astype(str)
                         results_df['correct_guesses'] = pd.to_numeric(results_df['correct_guesses'], errors='coerce')
                         
                         # Get results for this week
@@ -2387,12 +2392,13 @@ elif page == "Manage Players & Weeks":
             
             # Create editable interface for players
             for _, player in players_df.iterrows():
-                player_id = int(player['id'])
+                player_id = str(player['id'])  # Keep as string since it's a UUID4 hex
                 
                 # Calculate player statistics
                 player_stats = {'total_weeks': 0, 'participated': 0, 'omitted': 0}
                 if not results_df.empty:
-                    results_df['player_id'] = pd.to_numeric(results_df['player_id'], errors='coerce')
+                    # Convert player_id to string for comparison
+                    results_df['player_id'] = results_df['player_id'].astype(str)
                     player_results = results_df[results_df['player_id'] == player_id]
                     
                     if not player_results.empty:
