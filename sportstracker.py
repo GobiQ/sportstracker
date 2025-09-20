@@ -10,7 +10,7 @@ import time
 
 # Streamlit App Configuration
 st.set_page_config(
-    page_title="Sports Prediction Tracker",
+    page_title="Pick'ems 2026",
     page_icon="🏆",
     layout="wide",
     initial_sidebar_state="expanded"
