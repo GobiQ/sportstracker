@@ -992,9 +992,8 @@ def calculate_standings(data, season_year, week_number=None):
         
         standings_df = pd.DataFrame(standings)
         
-        # Sort by adjusted accuracy (primary), then absolute accuracy
-        if not standings_df.empty:
-            standings_df = standings_df.sort_values(['accuracy_adjusted', 'accuracy_absolute'], ascending=False)
+        # No need to sort here since each display will sort by its own criteria
+        # standings_df remains unsorted to allow proper individual ranking
         
         return standings_df
         
@@ -1594,6 +1593,8 @@ elif page == "Weekly Standings":
                     with col1:
                         st.write("**📊 Absolute Statistics** (including omissions as 0)")
                         abs_display = standings_df.copy()
+                        # Sort by absolute accuracy for proper ranking
+                        abs_display = abs_display.sort_values('accuracy_absolute', ascending=False)
                         abs_display['rank'] = range(1, len(abs_display) + 1)
                         abs_display = abs_display[['rank', 'player_name', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
                         abs_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
@@ -1602,6 +1603,8 @@ elif page == "Weekly Standings":
                     with col2:
                         st.write("**🎯 Adjusted Statistics** (excluding omissions)")
                         adj_display = standings_df.copy()
+                        # Sort by adjusted accuracy for proper ranking
+                        adj_display = adj_display.sort_values('accuracy_adjusted', ascending=False)
                         adj_display['rank'] = range(1, len(adj_display) + 1)
                         adj_display = adj_display[['rank', 'player_name', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted']]
                         adj_display.columns = ['Rank', 'Player', 'Correct', 'Possible', 'Accuracy %']
@@ -1643,6 +1646,8 @@ elif page == "Season Standings":
         with col1:
             st.write("**📊 Absolute Statistics** (including omissions as 0)")
             abs_display = standings_df.copy()
+            # Sort by absolute accuracy for proper ranking
+            abs_display = abs_display.sort_values('accuracy_absolute', ascending=False)
             abs_display['rank'] = range(1, len(abs_display) + 1)
             abs_display = abs_display[['rank', 'player_name', 'weeks_absolute', 'correct_absolute', 'possible_absolute', 'accuracy_absolute']]
             abs_display.columns = ['Rank', 'Player', 'Weeks', 'Correct', 'Possible', 'Accuracy %']
@@ -1651,6 +1656,8 @@ elif page == "Season Standings":
         with col2:
             st.write("**🎯 Adjusted Statistics** (excluding omissions)")
             adj_display = standings_df.copy()
+            # Sort by adjusted accuracy for proper ranking
+            adj_display = adj_display.sort_values('accuracy_adjusted', ascending=False)
             adj_display['rank'] = range(1, len(adj_display) + 1)
             adj_display = adj_display[['rank', 'player_name', 'weeks_adjusted', 'correct_adjusted', 'possible_adjusted', 'accuracy_adjusted', 'omitted_weeks']]
             adj_display.columns = ['Rank', 'Player', 'Weeks', 'Correct', 'Possible', 'Accuracy %', 'Omitted']
